@@ -510,3 +510,149 @@ python model_audit.py && python model_audit2.py && python materials.py   # model
 ```
 
 Web sources used *(web)*: Adobe Mixamo FAQ and upload help pages, and an Adobe community FAQ post (licensing, upload requirements). Source files read at the pinned three.js commit `b3396270682287470d161658ac01084d25e8dba6` (committed 2026-10-28): `Info.js`, `Renderer.js`, `WebGPUBackend.js`, `SkeletonUtils.js`, `KTX2Loader.js`, `GLTFLoader.js`, `Skinning.js`, `NodeLibrary.js`, `StandardNodeLibrary.js`, plus directory listings.
+
+
+---
+
+# Addendum A — M0 continuation (INCOMPLETE: stopped by usage limit)
+
+This addendum is appended; nothing above was replaced. Labels as before: [V] verified, [M] measured, [A] assumption, [R] recommendation.
+
+## A1. Git state found at the start of the continuation
+- Three baseline commits already exist on `main` (`ecca7d1`, `a7b9020`, `6292b3b`), made after the earlier "Approve Git baseline". No branch was created and nothing was amended. The request to create a branch *before* committing could not be honoured retroactively. **Proposal awaiting approval:** a local branch `m0-foundations` from `6292b3b`, no new commits.
+- **`origin/main` equals `6292b3b`** and `.git/FETCH_HEAD` is no longer empty, with upstream tracking configured [M]. Those commits are on the remote. I ran no push or fetch, so it was done by you or the desktop app.
+- The committed docs contain the Windows profile path and user name (this report's appendix, `test-baseline.md`). Removing them needs a follow-up commit (history cannot be rewritten). Not done.
+- Two new untracked files appeared in the repository root: a CV PDF and a photo. They are not mine and I did not open them. Do not `git add -A` without deciding about them.
+- `.claude/` is ignored and not tracked [V].
+
+## A2. Measurement environment [M]
+- Browser: the in-app pane (Chromium 152), emulated 1280x720, DPR 1, display about 144 Hz (a trivial page measured p50 7 ms).
+- **WebGPU adapter: Intel UHD (gen-12lp), not the RTX 3050**, despite `powerPreference: high-performance`. All timings are integrated-GPU numbers. `timestamp-query` is available but was not enabled.
+- **The pane throttles frames intermittently** (intervals of exactly 1,000 ms or 2,000 ms, `hasFocus()` false). A pilot run with unmodified code (variant `base`) was therefore **invalid for timing** and is excluded. **S1-S5 frame-time p50/p95/p99 for the unmodified game were NOT obtained.** Valid timing needs the Claude window in the foreground and uncovered for about 40 minutes. This is a request to you.
+- Throttle-independent facts from the pilot [M]: about 1,163 draw calls per frame at street level in 23 render passes; GPU memory live at load 322.6 MB textures and 126.9 MB buffers; 181 pipelines and 315 shader modules created during load.
+
+## A3. Character in the real city pipeline: original GLB, served copy only [M]
+Method: scratchpad server serves the repo unmodified (`base` verified byte-identical), with `main.js` patched in memory (exposes internals, loads the GLB after controllers and before culling, adds it to `dynamicRoots`). Variants `inst` (no model) and `model`, 3 repetitions each, 4 fixed positions, counters over frame-count windows.
+
+| Result | Value |
+|---|---|
+| Console/WebGPU errors in all runs | 0 |
+| GLTF load | 2,832 ms first, 232-260 ms later |
+| Draw calls per frame, model minus no-model | +57 to +64 (about +5.7%) |
+| Triangles per frame | +438K to +510K (about +10%) |
+| Hiding the model removes | 60 draws and 469,668 triangles = **3 x 156,556**, so it draws in the main pass **and both shadow cascades** |
+| Render passes | 23, unchanged |
+| GPU textures live at load | 516.0 vs 322.6 MB: **+193.4 MB** (matches the 193.3 MB estimate) |
+| GPU buffers live at load | +9.6 MB |
+| Pipelines / shader modules at load | 181 -> 186 / 315 -> 325 |
+| renderer.info draw calls vs WebGPU API draw count | identical in every window |
+
+- Frame interval (clean un-throttled windows only; **only one clean no-model window per position, so weak**): street P1 132.0 -> 138.8 ms (+5.2%), Times Square P2 97.3 -> 103.7 ms (+6.5%), helicopter 150 m P3 145.3 -> 145.8 ms (+0.3%). CPU per frame callback about +4 to +5 ms. P4 has no clean no-model window. GPU timestamps were not collected.
+- Rendering is correct under: MRT output, SSR, clustered lighting, both shadow cascades, reversed depth, `matrixWorldAutoUpdate = false` (dynamic root), skinned mesh visible. Time-of-day: golden hour and midday inspected visually; **twilight and night were not tested**. Bone animation (skinning update) via the dynamic root was **not tested**. SSR on/off was not tested.
+- **New finding N-01 confirmed visually:** as exported the suit renders almost black. With the six default-metallic materials cloned to `metalness = 0` it shows the correct red and navy suit with web pattern and red gloves. The asset is untouched; the fix is a runtime material override. Screenshots exist in the session tool-results folder only and were **not** copied into `docs/`.
+
+## A4. Overlay comparison: NOT completed
+- Attempt 1 (render the pipeline twice in one frame) was an invalid method: the scene pass is skipped on a repeated render within a frame. Its all-zero differences are meaningless and were discarded.
+- Attempt 2 (frozen traffic, sequential frames, noise floor) was validated: noise floor mean abs diff 0.23 and 0.93% of pixels above 8, versus 7.54 and 18.4% when the whole model is hidden. The full run (32 comparisons) was **in progress, at 7 of 32** when the limit was reached. **No overlay conclusion is available.** The "six coincident meshes" finding remains geometric only (see section 7.1).
+
+## A5. Tests
+`node --test` was not re-run in this continuation. Last result: 225 tests, 223 pass, 2 environmental failures. Only `docs/` and untracked files changed in the repository; `docs/` edits are uncommitted.
+
+## A6. Risk register changes
+- **N-01** confirmed: suit metallic by default.
+- **N-07 confirmed and worse:** the browser uses the Intel GPU, and the pane throttles frames.
+- **New:** commits are on the remote and the docs contain local path/user name; user files in the repo root could be committed by accident.
+- Resolved: skeleton update cost (once per skeleton); character cost is deterministic (+3 passes of triangles, +193 MB textures).
+
+## A7. G1: **NOT READY**
+Missing: valid unmodified S1-S5 frame times, a branch and approvals, the overlay comparison, remaining pipeline checks (twilight/night, skinning animation, SSR toggle), GPU timestamps, evidence images in `docs/`.
+
+## A8. Recommended next steps
+1. Approve branch `m0-foundations` from `6292b3b` (no commits), and decide on the CV/photo files and the path scrub.
+2. Keep the Claude window in the foreground, uncovered, for about 40 minutes; then I rerun S1-S5 (3 repetitions) and the remaining clean no-model windows.
+3. Finish the overlay run and copy the evidence images into `docs/`.
+
+
+---
+
+# Addendum B — 2026-10-31, second continuation (recovery and validation)
+
+Preserves everything above, including Addendum A. Labels: **[V]** verified, **[M]** measured, **[E]** estimate, **[R]** recommendation. Status of earlier numbers is in B4. Evidence images: `docs/spider-man-portfolio/evidence/m0-continuation/` (new, untracked).
+
+## B1. Git
+Branch `m0-foundations` created locally from `6292b3b` (`git switch -c m0-foundations 6292b3b`). HEAD = `6292b3bc843e0bc920516287e7482681ddd37ba4`, no upstream configured, 3 commits, **no new commits**. Working tree: this report modified; evidence folder, the user's two personal files untracked (never opened, moved, staged or committed). No fetch, push, pull or remote change was made [V]. `main` still tracks `origin/main` as before.
+
+## B2. Personal-information review (documentation)
+Scan of `docs/`: **6 lines in 2 files** contain machine/personal data: Windows user-profile paths (3 lines in `test-baseline.md`, 1 line in this report's appendix), the GitHub owner name inside the remote URL (1 line), and the absolute repo path (2 lines, low sensitivity). The architecture review, roadmap and risk files are clean. No other tracked file matches. Commit metadata necessarily contains the configured author name and e-mail; removing that would require rewriting history and is **not** proposed. A minimal redaction patch exists outside the repository and is **not applied**; replacements are `%LOCALAPPDATA%`, `%TEMP%`, `<repo>`, `<scratchpad>`, `<owner>`.
+
+## B3. GPU selection: RTX 3050 could NOT be selected or verified
+- Browser: the Claude desktop app's built-in Chromium (`claude.exe`, app 4.4212.0, Chromium 152.0.7977.167) [V].
+- `navigator.gpu.requestAdapter` with **every** option set returned **Intel (gen-12lp)**: default, `high-performance`, `low-power`, `compatibility` only, and the game's exact options (`high-performance` + `compatibility`). `forceFallbackAdapter` returned null. WebGL (ANGLE/D3D11) reports Intel UHD for default, high-performance and low-power contexts [M]. No NVIDIA adapter is exposed to the page.
+- Windows per-app GPU preference (read-only registry): the user's Chrome has "High performance"; **`claude.exe` has no entry** (system default = integrated GPU) [V].
+- Options (none applied): (1) set `claude.exe` to High performance in Windows Graphics settings and restart the app, which ends this session and is a system setting change, so it needs approval; (2) run the game in the user's own Chrome, which already prefers the discrete GPU, using the scratchpad server and a probe that reports back, with the user keeping that window in the foreground; (3) use Claude in Chrome (needs approval, opens a window).
+- Foreground/throttling: during this session the pane repeatedly became hidden ("session isn't open in any window"), `document.hasFocus()` was false throughout, and frame delivery stopped completely when hidden [M]. Valid timing therefore also needs the window visible.
+- **Consequence: no timing data was collected. S1-S5 were NOT run.** Nothing below is an RTX 3050 result.
+
+## B4. Status of measurements (what is valid, invalid, superseded)
+| Item | Status |
+|---|---|
+| Pilot "base" S1-S5 run (Addendum A) | **Invalid** for timing (intervals quantized to 1,000/2,000 ms); excluded |
+| Per-frame CPU time and frame intervals in model vs no-model runs (Addendum A) | Valid only in windows without throttle quantization; one clean no-model window per position; **Intel UHD only, weak**; not RTX results |
+| Draw-call, triangle and GPU-memory counters (Addendum A) | **Valid** [M], GPU-independent; counts reproduced exactly in B5 |
+| Same-frame A/B overlay method | **Invalid, superseded** (scene pass skipped on re-render; the "zero differences" were a method failure) |
+| Frozen-scene sequential method with noise floor | **Valid** [M] |
+| Dynamic-root move test (B5) | **Invalid** (no frames rendered during the step); result discarded |
+| Stage sizes: viewport emulated 1280x720, DPR 1 | applies to all B5/B6 runs |
+
+## B5. Character pipeline, original GLB, served-copy experiment, **Intel UHD, not RTX** [M unless noted]
+Conditions: variant `model`, midday, frozen traffic, camera 3.2 m, 1280x720, DPR 1, no console errors.
+- Model hidden vs shown: **-60 draws, -469,668 triangles = 3 x 156,556** (main pass + two shadow cascades).
+- `castShadow` off for all 20 meshes: **-40 draws, -313,112 triangles = 2 x 156,556** (both cascades render the model).
+- SSR intensity 0.5 -> 0: draw/triangle counts unchanged (post pass). Image difference in the character rectangle: mean abs 0.549 vs noise floor 0.145 (1.77% vs 0.61% of pixels above 8). The rectangle includes background, so a character-specific SSR effect **cannot be isolated**. By code the suit (roughness 0.82 > 0.75 cutoff) is excluded from SSR [V]; overlays (0.6) are not.
+- **Skinning in the real pipeline works:** bone animation moves the left wrist 0.411 m, CPU-skinned bounds change, 17.0% of pixels differ, no exploded geometry (`pipeline_skinning_bind_vs_animated.png`). The model root is in `dynamicRoots` and `scene.matrixWorldAutoUpdate === false` [V].
+- **Metallic material correction:** cloning the six default-metallic materials with `metalness = 0` (original asset untouched) changes a shadowed suit from near-black to the intended red/navy with web pattern (`city_midday_*` images). Visibility depends on lighting and view: the back view sunlit in the overlay experiment is already blue/red as exported. An earlier pixel-difference number for this test was polluted by moving traffic and is **not used**.
+- Pipelines +5 and shader modules +10 versus no model; GPU textures +193.4 MB, buffers +9.6 MB at load (Addendum A).
+- **Not completed:** twilight and night lighting (frames stopped), ground-shadow visibility (no visible shadow in this shaded canyon: ground-strip difference 0, so shadow *rendering* is shown by counters, not visually), dynamic-root move test, frame-time and shader-compile *timing* overhead on the correct GPU.
+
+## B6. Overlay experiment (six coincident overlays; eye overlay untouched), Intel UHD [M]
+Frozen scene, sequential A/B, noise floor measured with an unchanged pair, two views x two material conditions.
+- **Geometry change is exact:** all six off = **-18 draws, -71,913 triangles = 3 x 23,971** in both views. Each overlay alone = -3 draws and exactly 3 x its triangle count (silver web-shooter 6,302; red web-shooter 1,497; spider 4,544; shoe 1,836; leg 398; gauntlet 9,394).
+- **Visual difference:** the only systematic difference on the character is at the **shoes**: with overlays off, white patches appear on the soles/sides (the untextured `22_shoewhite` surface becomes visible). So **the shoe overlay is not redundant and removing it introduces a visible defect**; this also **contradicts the earlier depth-tie guess** (assumed the later-drawn base would win) [M]. The other five overlays show no visible difference in these views at midday (their differences are at the noise floor); this is **not** a proof for other lighting, distances or the first-person camera.
+- Mean abs difference over the character rectangle, all six off vs noise floor: as exported front 0.258 vs 0.154; metal0 front 0.202 vs 0.091; as exported back 0.524 vs 0.465; metal0 back 0.488 vs 0.216. The rectangle contains tree shading that varies with time, which sets the floor; localization in the composites is more informative than these means.
+- Per-overlay visual contribution beyond the all-six composite was **not** localized (single-overlay results are numeric only). Material differences (metallic 1.0 on `27_spiderenv` and `27_gauntletenv`, roughness 0.6 vs 0.82) are listed in section 6.4 and 7.1 above.
+- **Recommendation [R]:** do not blanket-remove the overlays. Keep `27_shoeenv` (or give `22_shoewhite` the shoe texture); the other five are candidates, to be confirmed in sunlit views and at the close/first-person camera before removal.
+
+## B7. Evidence files
+`evidence/m0-continuation/`: `overlay_{asExported,metal0}_{front,back}_ON_OFF_diff.png` (ON | OFF | difference x8), `pipeline_castShadow_ON_OFF_diff.png`, `pipeline_skinning_bind_vs_animated.png`, `city_golden_hour_asExported_6m.jpg`, `city_midday_asExported_3m.jpg`, `city_midday_metalness0_override_3m.jpg`. Raw JSON and scripts remain in the session scratchpad (temporary).
+
+## B8. Risk register changes
+- **N-07 upgraded to a blocker:** the built-in browser cannot use the RTX 3050 and loses frames when the window is not shown.
+- **N-11 new:** shoe overlay is visible; the earlier "six redundant overlays" conclusion is **superseded** (five candidates, one required).
+- **N-12 new:** the measurement harness needs a foreground window, so valid timing cannot be collected unattended.
+- N-01 (metallic default) stays confirmed, with the lighting caveat in B5.
+
+## B9. G1 readiness: **NOT READY**
+Met: character renders without errors in the real pipeline; both shadow cascades, skinning and the dynamic root verified; draw/triangle/memory cost exact; overlay geometry exact; overlay visual finding obtained. Missing: **any valid GPU timing, RTX adapter, S1-S5 baseline**, twilight/night, visible shadow, dynamic-root move, branch approvals (redaction, personal files) pending.
+
+## B10. Next steps [R]
+1. Decide the GPU route (B3 option 1 or 2) and approve the redaction patch.
+2. With the correct adapter verified and the window in the foreground, run S1-S5 x3 on unmodified code, then the model and no-model comparison with timing.
+3. Finish twilight/night and the dynamic-root test; confirm the five remaining overlays in sunlit and close views.
+
+
+---
+
+# Addendum C — 2026-10-31, RTX 3050 route via the user's Chrome (IN PROGRESS)
+
+Preserves Addenda A and B. Labels as before.
+
+## C1. Adapter verified on the discrete GPU [M]
+Route: option 2 of B3 (no Windows setting changed). Chrome 156 was launched with a **throw-away profile** (no user data, no extensions) by the scratchpad server's check page, which verified the adapter before any run and aborts otherwise.
+- WebGPU `requestAdapter` returned **vendor `nvidia`, architecture `ampere`** for every option set, including the game's exact options (`high-performance` + `compatibility`); `timestamp-query` is available. WebGL renderer: **"NVIDIA GeForce RTX 3050 6GB Laptop GPU (0x25EC)"** (ANGLE/D3D11). `forceFallbackAdapter` returned null.
+- Window state at check time: visible, `hasFocus() = true`, viewport 1280x765, DPR 1, outer 1296x860, display 1920x1080.
+- Frame delivery of a trivial page: 435 frames, p50 6.9 ms, p95 7.1, p99 7.3, max 7.4 (display refresh about 144 Hz). So no artificial throttling at that moment; frames are vsync-bound at about 6.9 ms.
+- Game code has no frame limiter (the loop is `renderer.setAnimationLoop`, no cap) [V]; the only cap is the display refresh.
+
+## C2. Run status
+The chain (unmodified game x3, then no-model and model x3 each, timestamps enabled for the latter) started automatically after the check. **It stalled before the first frame of the first run:** at about 18 minutes after launch the test window was covered by another Chrome window belonging to the user (read-only Windows z-order check: not minimized, not foreground), so animation frames were paused. **No timing data from this route exists yet.** The first run's S1 will be contaminated by the stall and must be discarded. Validity of every later window is recorded (hidden frames, throttle quantization, visibility), so a covered window cannot silently pass as valid data.
+- **Needed from the user:** keep the test Chrome window in front and uncovered for about 30 minutes.
