@@ -162,7 +162,7 @@ def main():
     if not isinstance(rows, list) or not rows:
         raise ValueError('Expected a nonempty JSON array of tree locations.')
     trees = prepare(rows)
-    asset = args.output.with_suffix('.bin.gz')
+    asset = args.output.with_suffix('.dat')
     compressed = gzip.compress(pack(trees), compresslevel=6, mtime=0)
     asset.write_bytes(compressed)
     output = module(len(trees), asset.name, hashlib.sha256(source).hexdigest())

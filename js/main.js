@@ -164,6 +164,23 @@ async function initApp() {
   document.addEventListener('visibilitychange', () => { if (document.hidden) savePlayerState(); });
   markInit('controllers');
 
+  // Spider-Man prototype (js/spider-*.js, js/portfolio-interaction.js): isolated and optional. It is loaded with a dynamic import, so
+  // `?spider=0` skips the module and its ~10 MB of model data entirely and the four original modes behave exactly as before.
+  // It must be installed before the dynamic roots below are collected (it adds an entity whose mesh moves every frame).
+  let spider = null;
+  if (new URLSearchParams(location.search).get('spider') !== '0') {
+    await showLoadingStage('Loading Spider-Man...');
+    try {
+      const { installSpider } = await import('./spider-install.js');
+      spider = await installSpider({ scene, controllerManager, cameraSystem, selectMode });
+      markInit('spider');
+    } catch (e) {
+      console.error('[spider] prototype failed to load, continuing without it', e);
+      delete controllerManager.entities.spider;
+      spider = null;
+    }
+  }
+
   // Island-wide static geometry: chunk & distance-cull the small props, shadow stand-ins for the big casters
   // (scene-culling.js)
   await showLoadingStage('Preparing scene visibility and shadows...');
@@ -274,10 +291,11 @@ async function initApp() {
     person: [[['W', 'S'], 'Walk / Run'], [['A', 'D'], 'Turn'], [['Space'], 'Jump'], [['Drag'], 'Orbit']],
     car: [[['W', 'S'], 'Drive / Reverse'], [['A', 'D'], 'Steer'], [['B'], 'Horn'], [['Drag'], 'Orbit']],
     cyclist: [[['W', 'S'], 'Pedal / Brake'], [['A', 'D'], 'Lean & Turn'], [['Drag'], 'Orbit']],
-    helicopter: [[['W', 'S'], 'Pitch'], [['A', 'D'], 'Yaw'], [['Space', 'E'], 'Ascend'], [['Q', 'C'], 'Descend']]
+    helicopter: [[['W', 'S'], 'Pitch'], [['A', 'D'], 'Yaw'], [['Space', 'E'], 'Ascend'], [['Q', 'C'], 'Descend']],
+    spider: [[['W', 'A', 'S', 'D'], 'Move / steer'], [['Shift'], 'Sprint'], [['Space'], 'Jump / release web'], [['Mouse'], 'Look'], [['Left click'], 'Web: hold to swing'], [['F'], 'Interact']]
   };
   // Top speeds in mph (controllers.js caps them at 8.2, 36, 19 & 52 m/s): full scale of the speed meter
-  const topSpeedMph = { person: 18, car: 81, cyclist: 43, helicopter: 116 };
+  const topSpeedMph = { person: 18, car: 81, cyclist: 43, helicopter: 116, spider: 100 };
 
   function renderControlHints(mode) {
     if (!elControlsHint) return;
@@ -314,6 +332,7 @@ async function initApp() {
       btn.classList.toggle('active', btn.getAttribute('data-mode') === mode);
     });
     document.body.dataset.mode = mode;
+    if (spider) spider.syncButton(mode);
     placeModeIndicator();
     const ent = controllerManager.getActiveEntity();
     if (elMode) elMode.textContent = ent.label;
@@ -535,6 +554,9 @@ async function initApp() {
       case 'Digit4':
         selectMode('helicopter');
         break;
+      case 'KeyT':
+        if (spider && !e.repeat && !e.metaKey && !e.ctrlKey && !e.altKey) selectMode('spider');
+        break;
       case 'Digit5':
         selectCamera('chase', true);
         break;
@@ -579,6 +601,7 @@ async function initApp() {
   });
 
   // Initialize the UI and chase camera around the restored player, or the default taxi on a first visit.
+  if (spider) spider.activate(); // the prototype starts as Spider-Man on 5th Ave; 1-4 still select the original modes
   selectMode(controllerManager.activeMode);
   selectCamera('chase', true);
   selectTime('golden');
@@ -686,8 +709,10 @@ async function initApp() {
 
     // Update 3rd-person controllers, camera, signals, traffic & vehicle collisions, building LODs, and dynamic shadow focus
     gamepadControls.update(dt);
+    if (spider) spider.update(dt, elapsed);
     controllerManager.update(dt, elapsed, cameraSystem.initialized ? cameraSystem.currentPos : null);
     cameraSystem.update(dt, elapsed);
+    if (spider) spider.updateCamera(dt);
     streetDetails.signalClock.value = elapsed;
     trafficSystem.update(
       dt,
