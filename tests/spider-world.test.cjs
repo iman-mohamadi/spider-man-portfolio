@@ -78,7 +78,7 @@ test('anchor search picks a facade that faces the player, ahead, above and in ra
   const a = w.findAnchor(0, 1.3, 0, 1, 0);
   assert.ok(a, 'found one');
   assert.ok(a.x > 30 && a.x < 41, `anchor ${a.x} is on the facade that faces the player (west face at x=40)`);
-  assert.ok(a.y > 55, 'high on the facade');
+  assert.ok(a.y > 20, 'high on the facade (any of its rows)');
   assert.ok(a.dist > 10 && a.dist < 100);
 });
 
@@ -118,4 +118,12 @@ test('lineClear is false through a building and true past it, and the end point 
   assert.equal(w.lineClear(0, 30, 0, 50, 30, 0), false, 'through the building');
   assert.equal(w.lineClear(0, 70, 0, 50, 70, 0), true, 'over the roof');
   assert.equal(w.lineClear(0, 30, 0, 20.4, 30, 0), true, 'ends on the facade');
+});
+
+test('a tall facade offers anchors on several heights, all of them high enough, so a building can be aimed at anywhere on its face', () => {
+  const w = world([building(40, -10, 60, 10, 90)]);
+  const ys = new Set();
+  w.forEachAnchor(0, 1.3, 0, { minY: 18 }, (x, y) => ys.add(Math.round(y)));
+  assert.ok(ys.size >= 3, `rows: ${[...ys]}`);
+  for (const y of ys) assert.ok(y >= 18 && y <= 90);
 });

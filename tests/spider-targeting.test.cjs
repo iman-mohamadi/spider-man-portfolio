@@ -6,7 +6,8 @@ const { loadModule } = require('./helpers/module.cjs');
 
 const read = (p) => readFileSync(join(__dirname, '..', p), 'utf8');
 const physics = loadModule(read('js/spider-physics.js'));
-const T = loadModule(read('js/spider-targeting.js'), { imports: { './spider-physics.js': physics } });
+const sim = loadModule(read('js/spider-swing-sim.js'), { imports: { './spider-physics.js': physics } });
+const T = loadModule(read('js/spider-targeting.js'), { imports: { './spider-physics.js': physics, './spider-swing-sim.js': sim } });
 
 // camera 5 m behind the origin looking along +z (bearing 0), tilted up 0.55 rad (about 32 degrees) towards the roof lines
 const view = (yaw = 0, pitchUp = 0.55, px = 0, py = 1.8, pz = -5) => ({ vHalf: 0.52, hHalf: 0.8, px, py, pz, fx: Math.sin(yaw) * Math.cos(pitchUp), fy: Math.sin(pitchUp), fz: Math.cos(yaw) * Math.cos(pitchUp) });
@@ -17,7 +18,7 @@ test('an anchor on the crosshair scores better than one off to the side, and any
   assert.ok(centre < side, `${centre} < ${side}`);
   assert.equal(T.scoreAnchor(v, 80, 40, 40), Infinity, 'far to the side');
   assert.equal(T.scoreAnchor(v, 0, 40, -60), Infinity, 'behind the camera');
-  assert.equal(T.scoreAnchor(v, 0, 300, 20), Infinity, 'straight up is not aimable');
+  assert.equal(T.scoreAnchor(view(0, -0.6), 0, 900, 20), Infinity, 'looking down, a point straight overhead is outside the elevation cone');
 });
 
 test('looking exactly at the roof edge beats looking a bit below it; looking along the street offers nothing above the screen', () => {
@@ -25,7 +26,7 @@ test('looking exactly at the roof edge beats looking a bit below it; looking alo
   const exact = view(0, edge), below = view(0, edge - 0.25);
   assert.ok(T.scoreAnchor(exact, 0, 40, 40) < T.scoreAnchor(below, 0, 40, 40));
   assert.ok(Number.isFinite(T.scoreAnchor(below, 0, 40, 40)), 'a quarter radian low is still on screen and aimable');
-  assert.equal(T.scoreAnchor(view(0, 0), 0, 40, 40), Infinity, 'level view: the roof line is above the top of the screen, so no marker');
+  assert.ok(T.scoreAnchor(view(0, 0), 0, 40, 40) > T.scoreAnchor(exact, 0, 40, 40), 'level view: the roof line is above the screen, still offered but ranked lower');
   // bearing dominates: a small sideways error costs more than the same vertical error
   assert.ok(T.scoreAnchor(exact, 8, 40, 40) > T.scoreAnchor(below, 0, 40, 40) * 0.5);
 });
@@ -120,8 +121,30 @@ test('screen projection puts a point straight ahead at the centre and rejects po
   assert.equal(T.project(cam, { x: 0, y: 0, z: 10 }, 1000, 600), false);
 });
 
-test('a point above the top of the screen is never offered (the marker must be visible)', () => {
-  const v = view(0, 0.3); // tilted up 0.3 rad, vertical half-FOV 0.52 rad
-  assert.ok(Number.isFinite(T.scoreAnchor(v, 0, 25, 40)), 'about 30 degrees up is on screen');
-  assert.equal(T.scoreAnchor(v, 0, 60, 40), Infinity, 'about 55 degrees up is off the top of the screen');
+test('points above the screen are still offered (the click always has a target) but visible ones win; absurd angles are rejected', () => {
+  const v = view(0, 0.3);
+  const visible = T.scoreAnchor(v, 0, 25, 40), above = T.scoreAnchor(v, 0, 60, 40);
+  assert.ok(Number.isFinite(visible) && Number.isFinite(above));
+  assert.ok(visible < above, 'an on-screen point beats an off-screen one at the same bearing');
+});
+
+test('projectClamped keeps an on-screen point where it is and pulls an off-screen one onto the edge with its direction', () => {
+  const cam = { matrixWorldInverse: { elements: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1] }, projectionMatrix: { elements: [1.5, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] } };
+  const on = { x: 0, y: 0, z: -10 };
+  assert.equal(T.projectClamped(cam, on, 1000, 600), 1);
+  const above = { x: 0, y: 40, z: -10 }; // far above the top
+  assert.equal(T.projectClamped(cam, above, 1000, 600), 2);
+  assert.ok(above.y > 0 && above.y < 60, `pulled to the top edge: ${above.y}`);
+  assert.ok(Math.abs(above.angle - -Math.PI / 2) < 1e-6, 'the arrow points up');
+  assert.equal(T.projectClamped(cam, { x: 0, y: 0, z: 10 }, 1000, 600), 0, 'behind the camera');
+});
+
+test('a selected target that stops qualifying (the player moved out of range) is dropped, not kept', () => {
+  const t = make([{ x: 0, y: 45, z: 42 }]);
+  const body = { x: 0, y: 0, z: 0 };
+  tick(t, view(), body);
+  assert.ok(t.current(), 'offered at first');
+  const far = { x: 0, y: 0, z: -80 }; // now 122 m away
+  for (let i = 0; i < 20; i++) t.update(1 / 20, view(0, 0.55, 0, 1.8, -85), far, true);
+  assert.equal(t.current(), null);
 });

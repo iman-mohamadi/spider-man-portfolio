@@ -7,7 +7,7 @@ const SPIDER = {
   coyote: 0.1, jumpBuffer: 0.12, stepUp: 0.55, stepDown: 0.6,
   radius: 0.45, chest: 1.3, turnRate: 14,
   // web swinging
-  swingGravity: 22, webMin: 10, webMax: 95, targetRange: 72, reelLimit: 0.5, reelSpeed: 16, swingClearance: 8, swingPump: 10, swingBrake: 9, swingSteer: 12, swingTurn: 0.75, swingDrag: 0.03, swingMax: 42,
+  swingGravity: 22, webMin: 10, webMax: 95, targetRange: 72, reelLimit: 0.5, reelSpeed: 16, reelRamp: 0.3, swingClearance: 8, swingPump: 10, swingBrake: 9, swingSteer: 14, swingTurn: 0.9, swingDrag: 0.03, swingMax: 42,
   releaseBoost: 0.06, releaseLift: 2.5
 };
 

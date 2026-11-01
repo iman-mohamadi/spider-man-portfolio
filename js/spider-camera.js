@@ -17,8 +17,10 @@ const CFG = {
   pitchMin: -1.0, pitchMax: 1.15, pitchDefault: 0.14,
   baseFov: 60, fovBoost: 10, speedLo: 8, speedHi: 45,
   lookAhead: 0.16, maxLookAhead: 5.5, maxLookAheadSwing: 8,
-  followRate: 1.0, followRateSwing: 1.6, followIdle: 0.9, followMinSpeed: 3, followMaxAngle: 1.75,
-  minDistance: 1.1, wallPad: 0.55, groundPad: 0.45
+  followRateSwing: 1.2, followIdle: 0.6, followMinSpeed: 6, followMaxAngle: 0.55,
+  minDistance: 1.1, wallPad: 0.55, groundPad: 0.45,
+  pivotRate: 14, pivotRateSpeed: 10, // pivot follow rate; it tightens with speed so the character stays near the frame centre at 40 m/s
+  frameUpSwing: 0.75 // while swinging the character sits lower in the frame, leaving room above for the next anchor
 };
 
 const smoothstep = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
@@ -41,6 +43,7 @@ class SpiderCamera {
     this.pivot = new THREE.Vector3();
     this.ahead = new THREE.Vector3();
     this.vyBias = 0;
+    this.frameUp = CFG.frameUp;
     this.pos = new THREE.Vector3();
     this.look = new THREE.Vector3();
     this.view = { px: 0, py: 0, pz: 0, fx: 0, fy: 0, fz: 1 }; // camera position and unit forward (the crosshair ray), for web targeting
@@ -92,14 +95,13 @@ class SpiderCamera {
     const c = this.controller, v = c.vel, speed3 = Math.hypot(v.x, v.y, v.z), hs = Math.hypot(v.x, v.z);
     const swinging = c.swinging, speedK = smoothstep(CFG.speedLo, CFG.speedHi, speed3);
 
-    // ----- gentle follow: only when the player is not using the mouse and is clearly moving; never against a deliberate turn
+    // ----- follow: the camera never turns by itself on the ground or in the air (that is how a camera ends up fighting the aim). The only
+    // automatic yaw is while swinging, and only a gentle nudge towards the travel direction when it is already within ~30 degrees of where the
+    // player is looking and the mouse has been still for a moment: a swing you aimed at stays centred, a swing you are looking away from is left alone.
     const idle = this._sinceLook > CFG.followIdle && !cs.isDragging;
-    if (idle && hs > CFG.followMinSpeed) {
+    if (swinging && idle && hs > CFG.followMinSpeed) {
       const diff = angleDiff(this.yaw, Math.atan2(v.x, v.z));
-      if (Math.abs(diff) < CFG.followMaxAngle) {
-        const rate = (swinging ? CFG.followRateSwing : CFG.followRate) * clamp((hs - CFG.followMinSpeed) / 10, 0, 1);
-        this.yaw += diff * (1 - Math.exp(-rate * dt));
-      }
+      if (Math.abs(diff) < CFG.followMaxAngle) this.yaw += diff * (1 - Math.exp(-CFG.followRateSwing * clamp((hs - CFG.followMinSpeed) / 10, 0, 1) * dt));
     }
 
     // ----- pivot: above the head, smoothed, leading the motion
@@ -113,12 +115,14 @@ class SpiderCamera {
     const vyT = clamp(v.y * 0.09, -3.2, 1.6); // look a little below when falling fast, a little above when launching
     if (this.snapNext) { pv.set(tx, ty, tz); this.ahead.set(0, 0, 0); this.vyBias = 0; }
     else {
-      this.ahead.x = damp(this.ahead.x, lx, 3.2, dt); this.ahead.z = damp(this.ahead.z, lz, 3.2, dt);
+      this.ahead.x = damp(this.ahead.x, lx, 4, dt); this.ahead.z = damp(this.ahead.z, lz, 4, dt);
       this.vyBias = damp(this.vyBias, vyT, 2.6, dt);
-      pv.x = damp(pv.x, tx, 14, dt); pv.z = damp(pv.z, tz, 14, dt);
+      const pr = CFG.pivotRate + CFG.pivotRateSpeed * speedK;
+      pv.x = damp(pv.x, tx, pr, dt); pv.z = damp(pv.z, tz, pr, dt);
       pv.y = damp(pv.y, ty, ty > pv.y ? 5.5 : 9, dt); // rises slower than it falls: a jump leaves the frame centre, a fall is followed closely
     }
-    const ax = pv.x + this.ahead.x * 0.6, ay = pv.y + CFG.frameUp + this.vyBias, az = pv.z + this.ahead.z * 0.6;
+    this.frameUp = this.snapNext ? CFG.frameUp : damp(this.frameUp, swinging ? CFG.frameUpSwing : CFG.frameUp, 2.5, dt);
+    const ax = pv.x + this.ahead.x * 0.6, ay = pv.y + this.frameUp + this.vyBias, az = pv.z + this.ahead.z * 0.6;
 
     // ----- view direction and desired camera position
     const cp = Math.cos(this.pitch), sp = Math.sin(this.pitch);

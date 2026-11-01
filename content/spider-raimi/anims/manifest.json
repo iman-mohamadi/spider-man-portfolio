@@ -1,0 +1,219 @@
+{
+ "version": 2,
+ "source": "Mixamo (see content/spider-raimi/README.md)",
+ "clips": {
+  "idle": {
+   "file": "idle.json",
+   "meta": {
+    "duration": 10,
+    "rootSpeed": 0,
+    "footSpeed": 0,
+    "contact": 0,
+    "firstContact": 0,
+    "airStart": null,
+    "airEnd": null,
+    "airSegments": 0
+   }
+  },
+  "walk": {
+   "file": "walk.json",
+   "meta": {
+    "duration": 1.0333,
+    "rootSpeed": 1.708,
+    "footSpeed": 1.642,
+    "contact": 0.097,
+    "firstContact": 0,
+    "airStart": null,
+    "airEnd": null,
+    "airSegments": 0
+   }
+  },
+  "run": {
+   "file": "run.json",
+   "meta": {
+    "duration": 0.7333,
+    "rootSpeed": 4.224,
+    "footSpeed": 4.187,
+    "contact": 0.25,
+    "firstContact": 0,
+    "airStart": 0.4667,
+    "airEnd": 0.6,
+    "airSegments": 2
+   }
+  },
+  "sprint": {
+   "file": "sprint.json",
+   "meta": {
+    "duration": 0.5333,
+    "rootSpeed": 5.9,
+    "footSpeed": 4.576,
+    "contact": 0.264,
+    "firstContact": 0,
+    "airStart": 0.3167,
+    "airEnd": 0.4333,
+    "airSegments": 2
+   }
+  },
+  "jump": {
+   "file": "jump.json",
+   "meta": {
+    "duration": 1.9,
+    "rootSpeed": 0,
+    "footSpeed": 0.339,
+    "contact": 0.278,
+    "firstContact": 0,
+    "airStart": 0.55,
+    "airEnd": 1.1,
+    "airSegments": 1
+   }
+  },
+  "runJump": {
+   "file": "runJump.json",
+   "meta": {
+    "duration": 0.9,
+    "rootSpeed": 4.732,
+    "footSpeed": 3.452,
+    "contact": 0.639,
+    "firstContact": 0,
+    "airStart": 0.0667,
+    "airEnd": 0.6,
+    "airSegments": 2
+   }
+  },
+  "fall": {
+   "file": "fall.json",
+   "meta": {
+    "duration": 0.7,
+    "rootSpeed": 0,
+    "footSpeed": 0,
+    "contact": 0,
+    "firstContact": 0,
+    "airStart": null,
+    "airEnd": null,
+    "airSegments": 0
+   }
+  },
+  "hardLand": {
+   "file": "hardLand.json",
+   "meta": {
+    "duration": 2,
+    "rootSpeed": 0.081,
+    "footSpeed": 0.582,
+    "contact": 0.069,
+    "firstContact": 0.0667,
+    "airStart": 0,
+    "airEnd": 0.0667,
+    "airSegments": 1
+   }
+  },
+  "runStop": {
+   "file": "runStop.json",
+   "meta": {
+    "duration": 0.9,
+    "rootSpeed": 0.864,
+    "footSpeed": 0.571,
+    "contact": 0.167,
+    "firstContact": 0,
+    "airStart": null,
+    "airEnd": null,
+    "airSegments": 0
+   }
+  },
+  "swingStart": {
+   "file": "swingStart.json",
+   "meta": {
+    "duration": 2.0333,
+    "rootSpeed": 1.719,
+    "footSpeed": 0.519,
+    "contact": 0.25,
+    "firstContact": 2.0333,
+    "airStart": 0,
+    "airEnd": 2.0333,
+    "airSegments": 1,
+    "hand": "R",
+    "meanHandY": 1.343,
+    "otherHandY": 1.15
+   }
+  },
+  "swingStartM": {
+   "file": "swingStartM.json",
+   "meta": {
+    "duration": 2.0333,
+    "rootSpeed": 1.719,
+    "footSpeed": 0.526,
+    "contact": 0.403,
+    "firstContact": 2.0333,
+    "airStart": 0,
+    "airEnd": 2.0333,
+    "airSegments": 1,
+    "hand": "L",
+    "meanHandY": 1.343,
+    "otherHandY": 1.15
+   }
+  },
+  "swingLoop": {
+   "file": "swingLoop.json",
+   "meta": {
+    "duration": 1.9667,
+    "rootSpeed": 2.512,
+    "footSpeed": 1.169,
+    "contact": 0.028,
+    "firstContact": 0.1833,
+    "airStart": 0.3667,
+    "airEnd": 1.9667,
+    "airSegments": 2,
+    "hand": "L",
+    "meanHandY": 1.358,
+    "otherHandY": 1.005
+   }
+  },
+  "swingLoopM": {
+   "file": "swingLoopM.json",
+   "meta": {
+    "duration": 1.9667,
+    "rootSpeed": 2.512,
+    "footSpeed": 1.116,
+    "contact": 0.097,
+    "firstContact": 0.15,
+    "airStart": 0.3667,
+    "airEnd": 1.9667,
+    "airSegments": 2,
+    "hand": "R",
+    "meanHandY": 1.358,
+    "otherHandY": 1.005
+   }
+  },
+  "swingLand": {
+   "file": "swingLand.json",
+   "meta": {
+    "duration": 1.8667,
+    "rootSpeed": 2.535,
+    "footSpeed": 0.806,
+    "contact": 0.694,
+    "firstContact": 1.3167,
+    "airStart": 0,
+    "airEnd": 1.3167,
+    "airSegments": 1,
+    "hand": "L",
+    "meanHandY": 1.676,
+    "otherHandY": 1.577
+   }
+  },
+  "swingLandM": {
+   "file": "swingLandM.json",
+   "meta": {
+    "duration": 1.8667,
+    "rootSpeed": 2.535,
+    "footSpeed": 0.797,
+    "contact": 0.694,
+    "firstContact": 1.3167,
+    "airStart": 0,
+    "airEnd": 1.3167,
+    "airSegments": 1,
+    "hand": "R",
+    "meanHandY": 1.677,
+    "otherHandY": 1.577
+   }
+  }
+ }
+}

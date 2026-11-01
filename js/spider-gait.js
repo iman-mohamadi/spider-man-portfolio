@@ -8,6 +8,9 @@ const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 const lerp = (a, b, t) => a + (b - a) * t;
 const smoothstep = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
 
+// Live tuning multipliers (spider-tuning.js): cadence scales the cycle frequency, lift the foot lift, lean is read by the rig.
+const GAIT = { cadence: 1, lift: 1, lean: 1, armSwing: 1 };
+
 // cycles per second at a given ground speed (walk .. jog .. run .. sprint)
 const FREQ = [[0, 1.0], [1.5, 1.08], [4, 1.75], [8.5, 2.2], [15, 2.9]];
 function cadence(speed) {
@@ -21,11 +24,11 @@ function cadence(speed) {
 /** Gait parameters for a ground speed: cycle frequency, stride length, stance span, duty factor (fraction of the cycle a foot is planted) and foot lift. */
 function gaitParams(speed, out = {}) {
   const u = clamp(speed / 8.5, 0, 1), v = clamp((speed - 8.5) / 6.5, 0, 1);
-  const freq = cadence(speed), stride = speed / freq;
+  const freq = cadence(speed) * GAIT.cadence, stride = speed / freq;
   const span = Math.min(0.78 + 0.14 * v, stride * 0.55);
   out.freq = freq; out.stride = stride; out.span = span;
   out.duty = stride > 1e-3 ? clamp(span / stride, 0.14, 0.64) : 0.64;
-  out.lift = 0.05 + 0.15 * u + 0.12 * v;
+  out.lift = (0.05 + 0.15 * u + 0.12 * v) * GAIT.lift;
   out.u = u; out.v = v;
   return out;
 }
@@ -87,4 +90,4 @@ function twoBoneIK(H, F, a, b, pole, out = {}) {
   return out;
 }
 
-export { clamp, lerp, smoothstep, cadence, gaitParams, footTrajectory, twoBoneIK };
+export { clamp, lerp, smoothstep, cadence, gaitParams, footTrajectory, twoBoneIK, GAIT };

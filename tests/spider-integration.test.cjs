@@ -125,3 +125,50 @@ test('the animation module no longer owns fixed sine poses: it is driven by the 
   assert.match(anim, /footTrajectory/);
   assert.doesNotMatch(anim, /const poses = \{ idle: newPose\(\)/);
 });
+
+test('the controller feeds the animation what it needs: world position for foot locking, time to impact and release anticipation', () => {
+  const ctrl = read('js/spider-controller.js'), anim = read('js/spider-anim.js'), inst = read('js/spider-install.js');
+  assert.match(ctrl, /px: rp\.x, pz: rp\.z/);
+  assert.match(ctrl, /landIn, releaseSoon/);
+  assert.match(anim, /const feet = \[0, 1\]\.map/, 'planted feet are pinned to world positions');
+  assert.match(anim, /S\.lockOn/);
+  assert.match(anim, /AIR_KEYS = \['takeoff', 'rise', 'apex', 'fall', 'prep', 'launch'\]/, 'the air state set');
+  assert.match(anim, /S\.relSoon/, 'release anticipation drives the swing pose');
+  assert.match(inst, /controller\.vel, controller\.grounded/, 'targeting gets the body velocity so it can predict the swing arc');
+});
+
+test('the dev-only animation probe is never loaded by the game', () => {
+  for (const f of ['js/main.js', 'js/spider-install.js', 'index.html']) assert.doesNotMatch(read(f), /anim-probe/);
+});
+
+test('the Raimi model is the default character with the original as fallback, and the original model files are untouched by the new code', () => {
+  const inst = read('js/spider-install.js'), raimi = read('js/spider-model-raimi.js');
+  assert.match(inst, /loadRaimiModel\(\)/);
+  assert.match(inst, /spiderModel'\) \?\? ?|get\('spiderModel'\)/);
+  assert.match(inst, /wantModel !== 'ps4'/);
+  assert.match(inst, /loadSpiderModel\(\{ textureSize/, 'the original model is the fallback');
+  assert.doesNotMatch(raimi + read('js/spider-clips.js'), /writeFile|fs\./);
+  assert.match(raimi, /content\/spider-raimi\/spider-raimi\.glb/);
+  assert.match(raimi, /0x46546c67/, 'a body that is not a GLB (download manager, proxy) is reported, not fed to the parser');
+});
+
+test('animation clips are optional and layered: the mixer drives the base, the procedural rig the web and the air, and a missing manifest keeps the procedural rig', () => {
+  const clips = read('js/spider-clips.js'), inst = read('js/spider-install.js');
+  assert.match(clips, /AnimationMixer/);
+  assert.match(clips, /bakeRetarget/);
+  assert.match(clips, /MAX_CADENCE/);
+  assert.match(clips, /manifest\.json/);
+  assert.match(clips, /copy\(s\.q\)\.slerp\(TMP\.q, w\)/,'the bone blend must not feed slerpQuaternions its own output');
+  assert.match(inst, /createClipRig/);
+  assert.match(inst, /clipMode !== 'off'/);
+  assert.match(inst, /rig\.rig\.kind === 'mixamo'/);
+});
+
+test('the 3D web strand is real geometry attached to the hand bone, with a shoot and a retract', () => {
+  const web = read('js/spider-web.js'), inst = read('js/spider-install.js');
+  assert.match(web, /STRANDS = 3/);
+  assert.doesNotMatch(web, /THREE\.Line|CylinderGeometry/);
+  assert.match(web, /shoot\(anchor\)/); assert.match(web, /release\(\)/); assert.match(web, /'retracting'/);
+  assert.match(inst, /side\.hand\.getWorldPosition/);
+  assert.match(inst, /mesh\.updateMatrixWorld\(true\);[\s\S]*web\.update\(/, 'matrices are refreshed before the strand reads the hand');
+});

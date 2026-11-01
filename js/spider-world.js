@@ -6,6 +6,9 @@ import { polygonContains } from './building-collision.js';
 
 const ANCHOR_MIN_HEIGHT = 16; // buildings lower than this offer no anchors
 const ANCHOR_EDGE_STEP = 9;   // m between anchor candidates along a facade
+const ANCHOR_ROW_STEP = 13;   // m between rows of anchors down a facade (roof edge, then lower rows), so a building can be aimed at anywhere on its face
+const ANCHOR_MIN_ROW = 20;    // lowest row (m above the street)
+const ANCHOR_MAX_ROWS = 4;
 
 function insideCollider(c, x, z) {
   if (x < c.minX || x > c.maxX || z < c.minZ || z > c.maxZ) return false;
@@ -22,6 +25,9 @@ function anchorsOf(c) {
   if (c._spiderAnchors) return c._spiderAnchors;
   const out = [];
   const top = c.maxY - 0.8;
+  const rows = [];
+  for (let y = top; y >= ANCHOR_MIN_ROW && rows.length < ANCHOR_MAX_ROWS; y -= ANCHOR_ROW_STEP) rows.push(y);
+  if (!rows.length) rows.push(top);
   if (c.polygon && c.maxY >= ANCHOR_MIN_HEIGHT) {
     const ring = c.polygon.outer;
     let area2 = 0;
@@ -37,7 +43,7 @@ function anchorsOf(c) {
       const n = Math.max(1, Math.floor(len / ANCHOR_EDGE_STEP));
       for (let k = 0; k < n; k++) {
         const t = (k + 0.5) / n;
-        out.push(a.x + ex * t + nx * 0.35, top, a.z + ez * t + nz * 0.35, nx, nz);
+        for (const y of rows) out.push(a.x + ex * t + nx * 0.35, y, a.z + ez * t + nz * 0.35, nx, nz);
       }
     }
     // building corners: where two real walls meet (more than ~35 degrees apart); the anchor sits on the corner's outward bisector
@@ -47,11 +53,11 @@ function anchorsOf(c) {
       const bx = e0.nx + e1.nx, bz = e0.nz + e1.nz, bm = Math.hypot(bx, bz);
       if (bm < 0.2 || bm > 1.64) continue; // walls (nearly) parallel or opposite: not a corner
       const nx = bx / bm, nz = bz / bm, v = ring[i];
-      out.push(v.x + nx * 0.4, top, v.z + nz * 0.4, nx, nz);
+      for (const y of rows) out.push(v.x + nx * 0.4, y, v.z + nz * 0.4, nx, nz);
     }
   } else if (!c.polygon && !c.obb && c.maxY >= ANCHOR_MIN_HEIGHT) { // authored landmark boxes
     const cx = (c.minX + c.maxX) / 2, cz = (c.minZ + c.maxZ) / 2;
-    out.push(cx, top, c.minZ - 0.35, 0, -1, cx, top, c.maxZ + 0.35, 0, 1, c.minX - 0.35, top, cz, -1, 0, c.maxX + 0.35, top, cz, 1, 0);
+    for (const y of rows) out.push(cx, y, c.minZ - 0.35, 0, -1, cx, y, c.maxZ + 0.35, 0, 1, c.minX - 0.35, y, cz, -1, 0, c.maxX + 0.35, y, cz, 1, 0);
   }
   c._spiderAnchors = out;
   return out;

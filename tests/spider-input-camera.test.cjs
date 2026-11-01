@@ -145,16 +145,29 @@ test('mouse look turns the camera and clamps pitch; the camera never fights the 
   assert.equal(h.camera.yaw, yaw0, 'untouched during and shortly after mouse use');
 });
 
-test('after the mouse has been idle a while the camera drifts gently towards the travel direction, but never past ~100 degrees', () => {
+test('the camera never rotates by itself on the ground or in the air, whatever the player is doing with the keys', () => {
   const h = cameraHarness();
   h.run(5);
-  h.camera.yaw = -0.8; h.controller.vel.z = 12; h.controller.vel.x = 0;
-  h.camera._sinceLook = 1e9;
-  h.run(240);
-  assert.ok(h.camera.yaw > -0.3, `swung behind the runner: ${h.camera.yaw}`);
-  h.camera.yaw = 2.6; // the runner moves towards the camera: that is not "behind", so no yanking
-  h.run(120);
-  assert.ok(Math.abs(h.camera.yaw - 2.6) < 1e-6);
+  h.camera.yaw = -0.8; h.controller.vel.z = 14; h.controller.vel.x = 0; h.camera._sinceLook = 1e9;
+  h.run(300);
+  assert.equal(h.camera.yaw, -0.8, 'running forward while looking sideways: the view stays where the player put it');
+  h.controller.grounded = false; h.controller.vel.y = -30; h.run(120);
+  assert.equal(h.camera.yaw, -0.8, 'same in a fall');
+  assert.equal(h.camera.pitch, h.camera.pitch); // pitch is only ever changed by the mouse
+});
+
+test('while swinging the camera only nudges towards travel when it is already within ~30 degrees of the view, and never against a recent mouse move', () => {
+  const run = (yaw, busy) => {
+    const h = cameraHarness();
+    h.run(5);
+    h.controller.swinging = true; h.controller.grounded = false; h.controller.vel.z = 20; h.controller.vel.x = 0;
+    h.camera.yaw = yaw; h.camera._sinceLook = busy ? 0 : 1e9;
+    for (let i = 0; i < 120; i++) { if (busy) h.input._look.pitch = 1e-9; h.camera.update(1 / 60); }
+    return h.camera.yaw;
+  };
+  assert.ok(Math.abs(run(-0.4, false)) < 0.15, 'a swing that is nearly where you look is gently centred');
+  assert.equal(run(-1.2, false), -1.2, 'a swing you are looking away from is left alone');
+  assert.ok(Math.abs(run(-0.4, true) - -0.4) < 1e-6, 'no drift while the mouse is in use');
 });
 
 test('walls pull the camera in at once and let it out slowly; the camera stays above the ground', () => {

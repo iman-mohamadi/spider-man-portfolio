@@ -1,0 +1,297 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Model lab</title>
+<!-- Dev-only page (never linked from the game): inspects the Sam Raimi Spider-Man FBX, converts it to GLB with Three.js, and checks clips.
+     Open it from the project's dev server, with tools/ helper server (scratchpad labserver.py) running on 127.0.0.1:8141. -->
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/gh/mrdoob/three.js@b3396270682287470d161658ac01084d25e8dba6/build/three.webgpu.js",
+  "three/webgpu": "https://cdn.jsdelivr.net/gh/mrdoob/three.js@b3396270682287470d161658ac01084d25e8dba6/build/three.webgpu.js",
+  "three/tsl": "https://cdn.jsdelivr.net/gh/mrdoob/three.js@b3396270682287470d161658ac01084d25e8dba6/build/three.tsl.js",
+  "three/addons/": "https://cdn.jsdelivr.net/gh/mrdoob/three.js@b3396270682287470d161658ac01084d25e8dba6/examples/jsm/"
+} }
+</script>
+<body style="font:13px monospace;background:#111;color:#ddd;padding:12px">
+<pre id="out">model lab: call window.lab.inspect() from the console / tool</pre>
+<script type="module">
+import * as THREE from 'three/webgpu';
+import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
+import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
+import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
+
+const LAB = 'http://127.0.0.1:8141';
+const lab = window.lab = { THREE, FBXLoader, GLTFExporter, LAB, fbx: null };
+
+lab.loadFbx = async (url = `${LAB}/newmodel/raimisuit.fbx`, texPath = `${LAB}/newmodel/tex/`) => {
+  const loader = new FBXLoader();
+  loader.setResourcePath(texPath);
+  const t0 = performance.now();
+  const group = await loader.loadAsync(url);
+  lab.fbx = group;
+  lab.loadMs = Math.round(performance.now() - t0);
+  return group;
+};
+
+
+lab.loadFbxBuffer = async (url) => { const { loadFbxTolerant } = await import('/js/spider-clips.js'); const r = await loadFbxTolerant(url); return { group: r.group, padded: r.trimmed }; };
+
+lab.inspect = async () => {
+  const g = lab.fbx || await lab.loadFbx();
+  g.updateMatrixWorld(true);
+  const r = { loadMs: lab.loadMs, rootType: g.type, rootScale: g.scale.toArray(), animations: g.animations.map((a) => ({ name: a.name, duration: +a.duration.toFixed(3), tracks: a.tracks.length })) };
+  const bones = [], skinned = [], mats = new Map();
+  g.traverse((o) => {
+    if (o.isBone) bones.push({ name: o.name, parent: o.parent && o.parent.name, pos: o.position.toArray().map((n) => +n.toFixed(3)) });
+    if (o.isSkinnedMesh || o.isMesh) {
+      const geo = o.geometry, pos = geo.attributes.position, idx = geo.index;
+      const info = { name: o.name, skinned: !!o.isSkinnedMesh, verts: pos.count, tris: idx ? idx.count / 3 : pos.count / 3, attrs: Object.keys(geo.attributes), materials: [].concat(o.material).map((m) => m.name || m.type), castShadow: o.castShadow };
+      if (o.isSkinnedMesh) {
+        const si = geo.attributes.skinIndex, sw = geo.attributes.skinWeight, used = new Set(); let lowSum = 0, maxInf = 0, badIdx = 0, unweighted = 0;
+        for (let i = 0; i < sw.count; i++) { let sum = 0, inf = 0; for (let k = 0; k < 4; k++) { const w = sw.getComponent(i, k); sum += w; if (w > 0.001) { inf++; used.add(si.getComponent(i, k)); if (si.getComponent(i, k) >= o.skeleton.bones.length) badIdx++; } } if (sum < 0.99) lowSum++; if (sum < 0.01) unweighted++; maxInf = Math.max(maxInf, inf); }
+        info.skeletonBones = o.skeleton.bones.length; info.bonesUsed = used.size; info.verticesWeightSumBelow099 = lowSum; info.unweightedVertices = unweighted; info.maxInfluences = maxInf; info.badBoneIndices = badIdx; info.bindMode = o.bindMode;
+        geo.computeBoundingBox(); const bb = geo.boundingBox; info.bboxMin = bb.min.toArray().map((n) => +n.toFixed(2)); info.bboxMax = bb.max.toArray().map((n) => +n.toFixed(2));
+      }
+      skinned.push(info);
+      for (const m of [].concat(o.material)) if (!mats.has(m.uuid)) mats.set(m.uuid, m);
+    }
+  });
+  r.boneCount = bones.length;
+  r.mixamoPrefix = bones.filter((b) => b.name.startsWith('mixamorig')).length;
+  r.boneNames = bones.map((b) => b.name);
+  r.skinnedMeshes = skinned;
+  r.materials = [...mats.values()].map((m) => ({ name: m.name, type: m.type, color: m.color && '#' + m.color.getHexString(), map: m.map && (m.map.name || (m.map.image && m.map.image.src || '').split('/').pop() || 'texture'), normalMap: !!m.normalMap, roughnessMap: !!m.roughnessMap, roughness: m.roughness, metalness: m.metalness, transparent: m.transparent, opacity: m.opacity, side: m.side }));
+  const box = new THREE.Box3().setFromObject(g);
+  r.bbox = { min: box.min.toArray().map((n) => +n.toFixed(2)), max: box.max.toArray().map((n) => +n.toFixed(2)), height: +(box.max.y - box.min.y).toFixed(2) };
+  r.hierarchyTop = []; g.children.forEach((c) => r.hierarchyTop.push(`${c.type}:${c.name}`));
+  lab.report = r;
+  document.getElementById('out').textContent = JSON.stringify(r, null, 1).slice(0, 4000);
+  return r;
+};
+
+// ---------------------------------------------------------------- FBX -> production GLB
+// The FBX stores Phong materials with 4096 px colour + normal maps and no roughness; the zip also has roughness maps for four materials.
+// Production materials are MeshStandardMaterial with the maps downsized (a 4096 RGBA map is 85 MB of GPU memory): the suit at 2048, the rest
+// at 512-1024. The model keeps its native centimetre skeleton under one root node scaled to metres (Mixamo clips are in cm too).
+const TARGET_HEIGHT = 1.82; // metres, head top (the FBX is 2.07 m tall in a T-pose)
+const PLAN = {
+  Suit:         { base: 'Body_BaseColor.1001', normal: 'Body_Normal.1001', rough: 'Body_Roughness.1001', size: 2048, roughness: 0.62 },
+  Web:          { base: 'Web_BaseColor', normal: 'Web_Normal', size: 1024, roughness: 0.7 },
+  WebBlack:     { base: 'WebBlack_BaseColor', normal: 'WebBlack_Normal', size: 1024, roughness: 0.7 },
+  Soles:        { base: 'Soles_BaseColor', normal: 'Soles_Normal', size: 512, roughness: 0.85 },
+  BackLogo:     { base: 'BackLogo_BaseColor', normal: 'BackLogo_Normal', size: 1024, roughness: 0.6 },
+  BackLogoRim:  { base: 'BackLogoRim_BaseColor', rough: 'BackLogoRim_Roughness', size: 1024, roughness: 0.6 },
+  'Material.002': { base: 'FrontLogo_BaseColor', normal: 'FrontLogo_Normal', rough: 'FrontLogo_Roughness', size: 1024, roughness: 0.6 },
+  Lens:         { base: 'Lens_BaseColor', size: 512, roughness: 0.15 },
+  Frames:       { base: 'Frames_BaseColor', normal: 'Frames_Normal', rough: 'Frames_Roughness', size: 512, roughness: 0.4 },
+  Glass:        { glass: true }
+};
+
+async function loadBitmap(name) {
+  const r = await fetch(`${LAB}/newmodel/tex/${name}.png`);
+  if (!r.ok) throw new Error('texture ' + name + ' ' + r.status);
+  return createImageBitmap(await r.blob());
+}
+function resized(bitmap, size, mime) {
+  const c = document.createElement('canvas'); c.width = c.height = size;
+  const ctx = c.getContext('2d'); ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high'; ctx.drawImage(bitmap, 0, 0, size, size);
+  const t = new THREE.Texture(c); t.flipY = false; t.wrapS = t.wrapT = THREE.RepeatWrapping; t.userData.mimeType = mime; t.needsUpdate = true;
+  return t;
+}
+
+lab.buildProduction = async () => {
+  const g = lab.fbx || await lab.loadFbx();
+  const log = [];
+  let mesh = null; g.traverse((o) => { if (o.isSkinnedMesh) mesh = o; });
+  const mats = [].concat(mesh.material), out = [];
+  for (const m of mats) {
+    const plan = PLAN[m.name];
+    if (!plan) { out.push(m); log.push('kept ' + m.name); continue; }
+    const nm = new THREE.MeshStandardMaterial({ name: m.name, metalness: 0, roughness: plan.roughness ?? 0.7, color: 0xffffff });
+    if (plan.glass) { Object.assign(nm, { color: new THREE.Color(0x0a0a0a), transparent: true, opacity: m.opacity, roughness: 0.05, depthWrite: false }); out.push(nm); log.push('glass opacity ' + m.opacity.toFixed(2)); continue; }
+    nm.map = resized(await loadBitmap(plan.base), plan.size, 'image/jpeg'); nm.map.colorSpace = THREE.SRGBColorSpace;
+    if (plan.normal) { nm.normalMap = resized(await loadBitmap(plan.normal), plan.size, 'image/jpeg'); nm.normalMap.colorSpace = THREE.NoColorSpace; }
+    if (plan.rough) { nm.roughnessMap = resized(await loadBitmap(plan.rough), plan.size, 'image/jpeg'); nm.roughnessMap.colorSpace = THREE.NoColorSpace; nm.roughness = 1; }
+    out.push(nm); log.push(`${m.name}: ${plan.size}px ${plan.normal ? '+normal ' : ''}${plan.rough ? '+roughness' : ''}`);
+  }
+  mesh.material = Array.isArray(mesh.material) ? out : out[0];
+  mesh.frustumCulled = false;
+  // The FBX geometry is non-indexed (431k vertices for 144k triangles) and interleaves its material groups (hundreds of tiny ranges = hundreds of
+  // draw calls, again for every shadow cascade). Reorder the triangles so every material is ONE contiguous range, then weld identical
+  // vertices (position, normal, uv AND skin indices / weights must all match, so skinning cannot change): 10 draw calls and ~1/6 of the vertices.
+  { const geo = mesh.geometry, groups = geo.groups.slice();
+    const mats = [...new Set(groups.map((gr) => gr.materialIndex))].sort((x, y) => x - y);
+    const names = Object.keys(geo.attributes); const total = geo.attributes.position.count;
+    const neu = new THREE.BufferGeometry();
+    for (const n of names) { const at = geo.attributes[n]; neu.setAttribute(n, new THREE.BufferAttribute(new at.array.constructor(total * at.itemSize), at.itemSize, at.normalized)); }
+    let w = 0; const ranges = []; lab.perm = new Uint32Array(total); lab.origGeo = geo; // lab.perm[k] = original vertex of reordered vertex k
+    for (const mi of mats) { const start = w; for (const gr of groups.filter((q) => q.materialIndex === mi)) { for (let q = 0; q < gr.count; q++) lab.perm[w + q] = gr.start + q; for (const n of names) { const at = geo.attributes[n], dst = neu.attributes[n]; dst.array.set(at.array.subarray(gr.start * at.itemSize, (gr.start + gr.count) * at.itemSize), w * at.itemSize); } w += gr.count; } ranges.push({ start, count: w - start, materialIndex: mi }); }
+    if (w !== total) throw new Error('vertex count changed ' + w + ' vs ' + total);
+    const merged = mergeVertices(neu, 1e-5); lab.preMergeIndex = merged.index.array.slice();
+    if (merged.index.count !== total) throw new Error('index length changed');
+    for (const r of ranges) merged.addGroup(r.start, r.count, r.materialIndex);
+    // FBX UVs have their origin bottom-left and FBXLoader flips the images to match; glTF has its origin top-left and unflipped images. Flip V once here
+    // (what every FBX -> glTF exporter does), otherwise every UV island samples the wrong part of the map.
+    { const uv = merged.attributes.uv; for (let i = 0; i < uv.count; i++) uv.setY(i, 1 - uv.getY(i)); uv.needsUpdate = true; }
+    mesh.geometry = merged;
+    log.push(`material ranges ${groups.length} -> ${ranges.length}; vertices ${total} -> ${merged.attributes.position.count}`); }
+  // scale: head top to TARGET_HEIGHT metres
+  const box = new THREE.Box3().setFromObject(mesh); // the T-pose box includes the arms, but height is the Y extent
+  const s = TARGET_HEIGHT / (box.max.y - Math.min(0, box.min.y)); g.scale.setScalar(s); g.updateMatrixWorld(true);
+  g.name = 'SpiderRaimi';
+  lab.production = g; lab.scaleApplied = s;
+  return { log, scale: s };
+};
+
+lab.exportGlb = async (saveName = 'spider-raimi.glb') => {
+  const exporter = new GLTFExporter();
+  const t0 = performance.now();
+  const buf = await exporter.parseAsync(lab.production, { binary: true, onlyVisible: false });
+  const r = await fetch(`${LAB}/savebin?to=${encodeURIComponent(saveName)}`, { method: 'POST', body: buf });
+  return { bytes: buf.byteLength, ms: Math.round(performance.now() - t0), save: await r.json() };
+};
+
+// Skinning check after conversion: the same bone rotations applied to the ORIGINAL FBX mesh and to (a) the welded in-memory mesh and (b) the GLB loaded back
+// must move every sampled vertex to the same place.
+lab.verify = async (glbUrl = '/content/spider-raimi/spider-raimi.glb') => {
+  const { GLTFLoader } = await import('three/addons/loaders/GLTFLoader.js');
+  const orig = new FBXLoader(); orig.setResourcePath(`${LAB}/newmodel/tex/`);
+  const o = await orig.loadAsync(`${LAB}/newmodel/raimisuit.fbx`); o.scale.setScalar(lab.scaleApplied); o.updateMatrixWorld(true);
+  const gltf = await new GLTFLoader().loadAsync(glbUrl); gltf.scene.updateMatrixWorld(true);
+  let om = null, pm = null; const gm = []; const bo = new Map(), bp = new Map(), bg = new Map();
+  o.traverse((x) => { if (x.isSkinnedMesh) om = x; if (x.isBone) bo.set(x.name, x); });
+  lab.production.traverse((x) => { if (x.isSkinnedMesh) pm = x; if (x.isBone) bp.set(x.name, x); });
+  gltf.scene.traverse((x) => { if (x.isSkinnedMesh) gm.push(x); if (x.isBone) bg.set(x.name, x); });
+  const q1 = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), -0.9), q2 = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), 0.8), q3 = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), 0.6);
+  for (const b of [bo, bp, bg]) { b.get('mixamorigLeftArm').quaternion.multiply(q1); b.get('mixamorigRightUpLeg').quaternion.multiply(q2); b.get('mixamorigSpine1').quaternion.multiply(q3); }
+  for (const root of [o, lab.production, gltf.scene]) root.updateMatrixWorld(true);
+  om.skeleton.update(); pm.skeleton.update(); gm[0].skeleton.update();
+  const a = new THREE.Vector3(), c = new THREE.Vector3(), d = new THREE.Vector3();
+  let maxOP = 0, maxPG = 0, n = 0;
+  const idx = lab.preMergeIndex, total = lab.perm.length, pc = pm.geometry.attributes.position.count;
+  for (let k = 0; k < total; k += 41) {
+    om.getVertexPosition(lab.perm[k], a); a.applyMatrix4(om.matrixWorld);
+    pm.getVertexPosition(idx[k], c); c.applyMatrix4(pm.matrixWorld);
+    maxOP = Math.max(maxOP, a.distanceTo(c)); n++;
+  }
+  const gpos = gm[0].geometry.attributes.position; // shared by every primitive of the GLB
+  for (let j = 0; j < pc; j += 29) { pm.getVertexPosition(j, c); c.applyMatrix4(pm.matrixWorld); gm[0].getVertexPosition(j, d); d.applyMatrix4(gm[0].matrixWorld); maxPG = Math.max(maxPG, c.distanceTo(d)); }
+  const byMat = {}; for (const m of gm) { const k = m.material.name; byMat[k] = (byMat[k] || 0) + 1; }
+  return { originalVsWelded_maxDiff_m: +maxOP.toExponential(2), weldedVsGlb_maxDiff_m: +maxPG.toExponential(2), sampled: n, weldedVertices: pc, glbVertices: gpos.count, glbSkinnedMeshObjects: gm.length, drawObjectsPerMaterial: byMat, skeletons: new Set(gm.map((m) => m.skeleton.uuid)).size, totalTris: gm.reduce((s, m) => s + m.geometry.index.count / 3, 0) };
+};
+
+// ---------------------------------------------------------------- Mixamo FBX clips -> clips baked for the Raimi skeleton
+// tools/clip-selection.json says which FBX files become which game clips (and how: hips / root handling, mirror image). Start the dev server with
+// `python tools/serve.py 8080 --save-clips`, open this page and run `await lab.convertAnims()`. Every selected clip is retargeted in world space onto the
+// converted model (js/spider-clips.js bakeRetarget), measured (duration, root speed, foot speed, contact, flight events), checked, and written to
+// content/spider-raimi/anims/<name>.json; manifest.json (version 2) carries the measurements. Source FBX files are only read.
+lab.convertAnims = async (only = null) => {
+  const { GLTFLoader } = await import('three/addons/loaders/GLTFLoader.js');
+  const { bakeRetarget, clipMeta, clipEvents } = await import('/js/spider-clips.js');
+  const sel = await (await fetch('/tools/clip-selection.json')).json();
+  const dst = (await new GLTFLoader().loadAsync('/content/spider-raimi/spider-raimi.glb')).scene;
+  dst.updateMatrixWorld(true);
+  const manifest = { version: 2, source: 'Mixamo (see content/spider-raimi/README.md)', clips: {} }, report = [];
+  const handOf = (clip) => { // which hand reaches higher on average: the one holding the web
+    const mixer = new THREE.AnimationMixer(dst), a = mixer.clipAction(clip); a.play();
+    let hl, hr; dst.traverse((o) => { if (o.isBone && /LeftHand$/.test(o.name)) hl = o; if (o.isBone && /RightHand$/.test(o.name)) hr = o; });
+    let sl = 0, sr = 0, n = 0; const v = new THREE.Vector3();
+    for (let t = 0; t < clip.duration; t += 1 / 20) { a.time = t; mixer.update(0); dst.updateMatrixWorld(true); hl.getWorldPosition(v); sl += v.y; hr.getWorldPosition(v); sr += v.y; n++; }
+    mixer.stopAllAction(); mixer.uncacheRoot(dst);
+    return { hand: sl > sr ? 'L' : 'R', meanHandY: +(Math.max(sl, sr) / n).toFixed(3), otherHandY: +(Math.min(sl, sr) / n).toFixed(3) };
+  };
+  const rest = new Map(); dst.traverse((o) => { if (o.isBone) rest.set(o, [o.position.clone(), o.quaternion.clone(), o.scale.clone()]); });
+  const restore = () => { for (const [o, [p, q, s]] of rest) { o.position.copy(p); o.quaternion.copy(q); o.scale.copy(s); } dst.updateMatrixWorld(true); };
+  for (const [name, cfg] of Object.entries(sel.clips)) {
+    if (only && !only.includes(name)) continue;
+    try {
+      const src = (await lab.loadFbxBuffer(sel.dir + cfg.src)).group;
+      const clip = src.animations[0];
+      if (!clip) { report.push(`${name}: the FBX has no animation`); continue; }
+      for (const mirror of cfg.mirror ? [false, true] : [false]) {
+        const key = name + (mirror ? 'M' : ''), rep = {};
+        restore();
+        const baked = bakeRetarget(clip, src, dst, { name: key, hips: cfg.hips, rootXZ: cfg.rootXZ, mirror, armRest: cfg.armRest || 'none', armSpread: cfg.armSpread || 0, report: rep });
+        // validation of the baked data: finite numbers, unit quaternions, the duration of the source, the same track set as the model's bones
+        let bad = 0, maxDev = 0;
+        for (const t of baked.tracks) { for (const x of t.values) if (!Number.isFinite(x)) bad++; if (t.name.endsWith('.quaternion')) for (let i = 0; i < t.values.length; i += 4) maxDev = Math.max(maxDev, Math.abs(Math.hypot(t.values[i], t.values[i + 1], t.values[i + 2], t.values[i + 3]) - 1)); }
+        const meta = clipMeta(baked, dst, { rootSpeed: rep.rootSpeed });
+        if (cfg.hips === 'crouchOnly') { // the game keeps the body height from the physics, but the flight events (feet off / on the ground) are the clip's own: measure them with its hips height
+          restore(); const full = bakeRetarget(clip, src, dst, { name: key + 'Full', hips: 'full', rootXZ: cfg.rootXZ, mirror, armRest: cfg.armRest || 'none', armSpread: cfg.armSpread || 0, report: {} }); restore();
+          const ev = clipEvents(full, dst); for (const k of Object.keys(ev)) meta[k] = ev[k] === null ? null : +(+ev[k]).toFixed(4);
+        }
+        if (cfg.hand) Object.assign(meta, handOf(baked));
+        restore();
+        const json = JSON.stringify({ baked: true, source: cfg.src, options: { hips: cfg.hips, rootXZ: cfg.rootXZ, mirror, armRest: cfg.armRest || 'none', armSpread: cfg.armSpread || 0 }, clip: baked.toJSON() });
+        const r = await fetch(`/__save?name=${key}.json`, { method: 'POST', body: json });
+        if (!r.ok) { report.push(`${key}: could not save (start the server with --save-clips) ${r.status}`); continue; }
+        manifest.clips[key] = { file: key + '.json', meta };
+        report.push({ key, from: cfg.src, tracks: baked.tracks.length, kb: Math.round(json.length / 1024), nonFinite: bad, maxQuatDeviation: +maxDev.toExponential(1), durationDiff: +(baked.duration - clip.duration).toFixed(4), meta });
+      }
+    } catch (e) { report.push(`${name}: ${e.message}`); }
+  }
+  if (!only) await fetch('/__save?name=manifest.json', { method: 'POST', body: JSON.stringify(manifest, null, 1) });
+  lab.convertReport = report;
+  return report;
+};
+
+// ---------------------------------------------------------------- animation library audit
+// lab.inspectAnims(['Idle.fbx', 'Action Adventure Pack/running.fbx', ...]) -> one record per file (see the fields below); used to write ANIMATION_CATALOG.md.
+lab.inspectAnims = async (files, dir = '/content/spider-raimi/anims-src/') => {
+  const { GLTFLoader } = await import('three/addons/loaders/GLTFLoader.js');
+  const { bakeRetarget, analyseClip } = await import('/js/spider-clips.js');
+  const dst = (await new GLTFLoader().loadAsync('/content/spider-raimi/spider-raimi.glb')).scene;
+  const dstBones = new Set(); dst.traverse((o) => { if (o.isBone) dstBones.add(o.name); });
+  const out = [];
+  for (const f of files) {
+    const rec = { file: f };
+    try {
+      const loaded = await lab.loadFbxBuffer(dir + encodeURI(f)); const g = loaded.group; rec.paddedToParse = loaded.padded;
+      g.updateMatrixWorld(true);
+      rec.clips = g.animations.length;
+      const clip = g.animations[0];
+      if (!clip) { rec.error = 'no animation'; out.push(rec); continue; }
+      rec.clipName = clip.name; rec.duration = +clip.duration.toFixed(3);
+      const names = new Set(), bones = []; let skinned = 0, meshes = 0;
+      g.traverse((o) => { if (o.isBone) { bones.push(o); names.add(o.name); } if (o.isSkinnedMesh) skinned++; if (o.isMesh) meshes++; });
+      rec.bones = bones.length; rec.skinnedMeshes = skinned; rec.meshes = meshes;
+      rec.mixamoNames = bones.filter((b) => b.name.startsWith('mixamorig')).length;
+      const animated = new Set(clip.tracks.map((t) => t.name.slice(0, t.name.lastIndexOf('.'))));
+      rec.animatedBones = animated.size;
+      rec.notInRaimi = [...animated].filter((n) => !dstBones.has(n));
+      rec.tracks = clip.tracks.length;
+      const hq = clip.tracks.find((t) => t.name === 'mixamorigHips.quaternion'), hp = clip.tracks.find((t) => t.name === 'mixamorigHips.position');
+      rec.keyframes = hq ? hq.times.length : 0; rec.fps = hq && clip.duration > 0 ? Math.round((hq.times.length - 1) / clip.duration) : 0;
+      // units, rest hips height
+      const hips = bones.find((b) => b.name === 'mixamorigHips'); const hv = hips.getWorldPosition(new THREE.Vector3());
+      rec.unitsCm = hv.y > 20; const toM = hv.y > 20 ? 0.01 : 1; rec.restHipsY = +(hv.y * toM).toFixed(3);
+      // root motion: hips position track
+      if (hp) {
+        const v = hp.values, n = hp.times.length; let minY = 1e9, maxY = -1e9, minX = 1e9, maxX = -1e9, minZ = 1e9, maxZ = -1e9;
+        for (let i = 0; i < n; i++) { minX = Math.min(minX, v[i * 3]); maxX = Math.max(maxX, v[i * 3]); minY = Math.min(minY, v[i * 3 + 1]); maxY = Math.max(maxY, v[i * 3 + 1]); minZ = Math.min(minZ, v[i * 3 + 2]); maxZ = Math.max(maxZ, v[i * 3 + 2]); }
+        rec.hipsTravelXZ_m = +(Math.hypot(v[(n - 1) * 3] - v[0], v[(n - 1) * 3 + 2] - v[2]) * toM).toFixed(2);
+        rec.hipsRangeX_m = +((maxX - minX) * toM).toFixed(2); rec.hipsRangeZ_m = +((maxZ - minZ) * toM).toFixed(2); rec.hipsY_m = [+(minY * toM).toFixed(2), +(maxY * toM).toFixed(2)];
+        rec.travelSpeed = +(rec.hipsTravelXZ_m / clip.duration).toFixed(2);
+        rec.startZ_m = +(v[2] * toM).toFixed(2); rec.endZ_m = +(v[(n - 1) * 3 + 2] * toM).toFixed(2); rec.startX_m = +(v[0] * toM).toFixed(2); rec.endX_m = +(v[(n - 1) * 3] * toM).toFixed(2);
+      }
+      // yaw of the hips over the clip: sample the hips world forward direction
+      { const mixer = new THREE.AnimationMixer(g), a = mixer.clipAction(clip); a.play(); const yaws = []; const N = 24, fw = new THREE.Vector3(), q = new THREE.Quaternion();
+        let lowestFoot = 1e9; const lf = bones.find((b) => b.name === 'mixamorigLeftFoot'), rf = bones.find((b) => b.name === 'mixamorigRightFoot'); const head = bones.find((b) => b.name === 'mixamorigHead'); let headMin = 1e9, headMax = -1e9, tilt = 0, hipsMinY = 1e9, hipsMaxY = -1e9; const vv = new THREE.Vector3();
+        for (let i = 0; i <= N; i++) { a.time = Math.min(clip.duration, i / N * clip.duration); mixer.update(0); g.updateMatrixWorld(true); hips.getWorldQuaternion(q); fw.set(0, 0, 1).applyQuaternion(q); yaws.push(Math.atan2(fw.x, fw.z)); head.getWorldPosition(vv); headMin = Math.min(headMin, vv.y * toM); headMax = Math.max(headMax, vv.y * toM); lf.getWorldPosition(vv); const ly = vv.y * toM; rf.getWorldPosition(vv); lowestFoot = Math.min(lowestFoot, ly, vv.y * toM); hips.getWorldPosition(vv); hipsMinY = Math.min(hipsMinY, vv.y * toM); hipsMaxY = Math.max(hipsMaxY, vv.y * toM); const up = new THREE.Vector3(0, 1, 0).applyQuaternion(q); tilt = Math.max(tilt, Math.acos(Math.max(-1, Math.min(1, up.y))) * 180 / Math.PI); }
+        let net = 0; for (let i = 1; i < yaws.length; i++) { let d = yaws[i] - yaws[i - 1]; d = Math.atan2(Math.sin(d), Math.cos(d)); net += d; }
+        rec.netYaw_deg = Math.round(net * 180 / Math.PI); rec.headY_m = [+headMin.toFixed(2), +headMax.toFixed(2)]; rec.maxHipsTilt_deg = Math.round(tilt); rec.lowestFootY_m = +lowestFoot.toFixed(2);
+        // loop closure: first vs last pose of the main bones
+        a.time = 0; mixer.update(0); const first = {}; for (const b of bones) first[b.name] = b.quaternion.clone();
+        a.time = clip.duration; mixer.update(0); let worst = 0; for (const b of bones) { if (!first[b.name]) continue; const d = Math.min(1, Math.abs(first[b.name].dot(b.quaternion))); worst = Math.max(worst, 2 * Math.acos(d) * 180 / Math.PI); }
+        rec.loopGap_deg = +worst.toFixed(1); mixer.stopAllAction(); }
+      // other bones' position tracks that actually move (they would stretch a different skeleton)
+      let moving = 0; for (const t of clip.tracks) { if (!t.name.endsWith('.position') || t.name.startsWith('mixamorigHips')) continue; let lo = [1e9, 1e9, 1e9], hi = [-1e9, -1e9, -1e9]; for (let i = 0; i < t.times.length; i++) for (let k = 0; k < 3; k++) { lo[k] = Math.min(lo[k], t.values[i * 3 + k]); hi[k] = Math.max(hi[k], t.values[i * 3 + k]); } if (Math.max(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]) * toM > 0.01) moving++; }
+      rec.movingOtherPositionTracks = moving;
+      // bake onto the Raimi skeleton and measure the stride (locomotion clips only make sense with a value)
+      const baked = bakeRetarget(clip, g, dst, { name: f });
+      const an = analyseClip(baked, dst); rec.bakedStrideSpeed = +an.speed.toFixed(2); rec.leftContact = +an.contact.toFixed(2);
+    } catch (e) { rec.error = String(e.message || e); }
+    out.push(rec);
+  }
+  return out;
+};
+</script>

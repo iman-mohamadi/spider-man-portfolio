@@ -1,12 +1,16 @@
 import * as THREE from 'three/webgpu';
 import { createContactShadowMaterial } from './tsl-materials.js';
 import { loadSpiderModel } from './spider-model.js';
+import { loadRaimiModel } from './spider-model-raimi.js';
 import { createSpiderRig } from './spider-anim.js';
+import { loadClipSet, createClipRig } from './spider-clips.js';
 import { createSpiderWorld } from './spider-world.js';
-import { SpiderInput } from './spider-input.js';
+import { SpiderInput, LOOK_SENS } from './spider-input.js';
+import { SPIDER } from './spider-physics.js';
+import { GAIT } from './spider-gait.js';
 import { SpiderController } from './spider-controller.js';
-import { SpiderCamera } from './spider-camera.js';
-import { WebTargeting } from './spider-targeting.js';
+import { SpiderCamera, SPIDER_CAMERA } from './spider-camera.js';
+import { WebTargeting, TARGETING } from './spider-targeting.js';
 import { WebStrand } from './spider-web.js';
 import { PortfolioInteraction, loadContent } from './portfolio-interaction.js';
 
@@ -23,7 +27,13 @@ function loadCss(href) {
 
 async function installSpider({ scene, controllerManager, cameraSystem, selectMode, options = {} }) {
   loadCss(new URL('../css/spider.css', import.meta.url).href);
-  const model = await loadSpiderModel({ textureSize: options.textureSize ?? 1024, hideOverlays: options.hideOverlays ?? true });
+  // Which character: the Raimi model (Mixamo skeleton) by default, the original PS4 model with ?spiderModel=ps4 or when the Raimi files cannot be loaded.
+  const wantModel = new URLSearchParams(location.search).get('spiderModel');
+  let model = null;
+  if (wantModel !== 'ps4') {
+    try { model = await loadRaimiModel(); } catch (e) { console.warn('[spider] Raimi model unavailable, using the original model', e); }
+  }
+  if (!model) model = { ...(await loadSpiderModel({ textureSize: options.textureSize ?? 1024, hideOverlays: options.hideOverlays ?? true })), kind: 'ps4' };
 
   // ---- entity: the object the camera, HUD, traffic and map read
   const mesh = new THREE.Group();
@@ -31,7 +41,18 @@ async function installSpider({ scene, controllerManager, cameraSystem, selectMod
   const visual = new THREE.Group(); // carries the body tilt (hanging from the web); the manager only ever sets mesh.position / rotation.y
   visual.add(model.root);
   mesh.add(visual);
-  const rig = createSpiderRig({ root: model.root, visual }); // reads the bind pose: must run before the mesh moves
+  let rig = createSpiderRig({ root: model.root, visual }); // reads the bind pose: must run before the mesh moves
+  // Real Mixamo clips on the Mixamo-skeleton model: content/spider-raimi/anims/manifest.json (production) or ?spiderClips=xbot (development: the Three.js
+  // example Xbot's idle / walk / run, fetched at run time). Without clips, or with ?spiderClips=off, the procedural rig animates everything as before.
+  let clipInfo = null;
+  const clipMode = new URLSearchParams(location.search).get('spiderClips');
+  if (rig.enabled && rig.rig.kind === 'mixamo' && clipMode !== 'off') {
+    try {
+      const cs = await loadClipSet(model.root, { source: clipMode === 'xbot' ? 'xbot' : 'manifest' });
+      if (cs && new URLSearchParams(location.search).get('spiderRunJump') === '0') delete cs.set.runJump; // ?spiderRunJump=0: running jumps use the standing jump clip, as before
+      if (cs) { rig = createClipRig({ root: model.root, visual, proc: rig, set: cs.set }); clipInfo = { source: cs.source, clips: Object.fromEntries(Object.entries(cs.set).map(([k, v]) => [k, { duration: +v.clip.duration.toFixed(2), speed: +v.info.speed.toFixed(2), contact: +v.info.contact.toFixed(2) }])) }; }
+    } catch (e) { console.warn('[spider] clips unavailable, procedural animation only', e); }
+  }
   const shadowGeo = new THREE.PlaneGeometry(1.0, 1.0);
   shadowGeo.rotateX(-Math.PI * 0.5);
   const contactShadow = new THREE.Mesh(shadowGeo, createContactShadowMaterial());
@@ -88,9 +109,10 @@ async function installSpider({ scene, controllerManager, cameraSystem, selectMod
   hint.className = 'spider-hint';
   document.body.append(hint);
   let hintText = '';
-  let toastOn = false;
+  let toastOn = false, webOn = false;
+  const handPos = new THREE.Vector3(), handDir = new THREE.Vector3(), lastHand = new THREE.Vector3();
   const api = {
-    entity, controller, camera, portfolio, web, model, rig, world, input, targeting,
+    entity, controller, camera, portfolio, web, model, rig, world, input, targeting, clipInfo,
     /** Makes Spider-Man the active mode and places him at the start (call before the first selectMode). */
     activate() {
       controllerManager.setMode('spider');
@@ -106,14 +128,22 @@ async function installSpider({ scene, controllerManager, cameraSystem, selectMod
       if (input.consumeInteract() && active) portfolio.interact();
       if (active) {
         controller.update(dt);
-        const p = controller.renderPos, a = controller.anchor;
-        if (a && controller.swinging) {
-          const cy = p.y + 1.3 + 0.3;
-          let dx = a.x - p.x, dy = a.y - cy, dz = a.z - p.z; const m = Math.hypot(dx, dy, dz) || 1; dx /= m; dy /= m; dz /= m;
-          web.set(p.x + dx * 0.55, cy + dy * 0.55, p.z + dz * 0.55, a.x, a.y, a.z);
-        } else web.hide();
+        // the web: starts at the real hand bone (matrices refreshed first, so the strand does not lag a frame behind the pose), ends at the anchor
+        const a = controller.anchor, swinging = controller.swinging && !!a;
+        if (swinging && !webOn) { web.shoot(a); webOn = true; } else if (!swinging && webOn) { web.release(); webOn = false; }
+        if (web.active) {
+          mesh.updateMatrixWorld(true);
+          const rg = rig.rig, side = controller.webSide > 0 ? rg.L : rg.R;
+          if (side && side.hand) {
+            side.hand.getWorldPosition(handPos);
+            side.fore.getWorldPosition(handDir); handDir.subVectors(handPos, handDir).normalize(); // forearm -> hand: where the fingers point
+            handPos.addScaledVector(handDir, 0.07);
+            lastHand.copy(handPos);
+          }
+          web.update(dt, lastHand, controller.tension, cameraSystem.camera, elapsed);
+        }
         contactShadow.visible = controller.grounded; // the mesh hierarchy itself is refreshed by main.js (entity meshes are dynamic roots)
-      } else web.hide();
+      } else { web.hide(); webOn = false; }
       portfolio.update(dt, elapsed, entity.position, active);
       const msg = controller.noAnchorFlash > 0 ? 'No web target: aim at a building' : '';
       const on = !!msg && active;
@@ -124,12 +154,16 @@ async function installSpider({ scene, controllerManager, cameraSystem, selectMod
     updateCamera(dt) {
       camera.update(dt);
       const live = camera.active && !controller.paused;
-      targeting.update(dt, camera.view, entity.position, live && !controller.swinging);
+      targeting.update(dt, camera.view, entity.position, live && !controller.swinging, controller.vel, controller.grounded);
       targeting.render(cameraSystem.camera, live);
       const text = !live ? '' : input.locked ? '' : input.lockFailed ? 'Left click: web · hold right mouse button to look' : 'Click the game to capture the mouse · Esc frees it';
       if (text !== hintText) { hintText = text; hint.textContent = text; hint.classList.toggle('is-on', !!text); }
     }
   };
+  if (new URLSearchParams(location.search).has('spiderTune')) { // live feel-tuning sliders: every value the game reads each frame (see spider-tuning.js)
+    const { installTuning } = await import('./spider-tuning.js');
+    api.tuning = installTuning({ spider: SPIDER, camera: SPIDER_CAMERA, targeting: TARGETING, look: LOOK_SENS, gait: GAIT });
+  }
   if (new URLSearchParams(location.search).has('spiderDebug')) window.__spider = api; // read-only inspection handle for manual testing
   return api;
 }

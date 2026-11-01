@@ -204,7 +204,13 @@ class SpiderController {
     const yaw = this.getViewYaw(), f = this._fwd, r = this._right;
     f.x = Math.sin(yaw); f.z = Math.cos(yaw); r.x = -Math.cos(yaw); r.z = Math.sin(yaw);
     swingForces(v, c, a, f, r, w.fwd, w.str, h, cfg);
-    if (this.webLength > this.webTarget) this.webLength = Math.max(this.webTarget, this.webLength - cfg.reelSpeed * h); // reel in: a smooth pull, not a snap
+    // reel in: a smooth pull that eases in over the first reelRamp seconds (no yank the instant the web hits)
+    if (this.webLength > this.webTarget) {
+      const ease = cfg.reelRamp > 0 ? Math.min(1, this.swingTime / cfg.reelRamp) : 1;
+      // too close to the street on the way down: pull harder, so the arc clears the ground instead of scraping it
+      const low = p.y < this.world.floorAt(p.x, p.z, p.y, 0.3) + 6 && v.y < 0 ? 2.6 : 1;
+      this.webLength = Math.max(this.webTarget, this.webLength - cfg.reelSpeed * ease * ease * low * h);
+    }
     const hh = h / SUBSTEPS;
     for (let s = 0; s < SUBSTEPS; s++) {
       v.y -= cfg.swingGravity * hh * 0.5;
@@ -217,8 +223,11 @@ class SpiderController {
       const rl = Math.max(1, this.webLength), ry = (c.y - a.y) / rl, sp2 = v.x * v.x + v.y * v.y + v.z * v.z;
       this.tension = clamp((sp2 / rl - cfg.swingGravity * ry) / (2 * cfg.swingGravity), 0, 1.3);
     }
-    this._collide();
+    const vx0 = v.x, vz0 = v.z;
+    const pushed = this._collide();
     this._face(h);
+    // ran into a wall at speed (a swing straight at a facade): the web lets go and the body slides down the wall instead of being pinned to it
+    if (pushed > 0.02 && Math.hypot(vx0, vz0) - Math.hypot(v.x, v.z) > 6) { this._endSwing(false); return; }
     const floor = this.world.floorAt(p.x, p.z, prevY, 0.3);
     if (v.y <= 0 && p.y <= floor) { const impact = -v.y; p.y = floor; this.anchor = null; this._land(impact); this.webCooldown = 0.12; this.pressBuffer = 0; return; }
     const toX = a.x - c.x, toY = a.y - c.y, toZ = a.z - c.z, dist = Math.hypot(toX, toY, toZ);
@@ -279,8 +288,19 @@ class SpiderController {
         const ch = Math.cos(e.heading), sh = Math.sin(e.heading); // world -> the body's local frame
         al = this._anchorLocal.set(dx * ch - dz * sh, dy, dx * sh + dz * ch);
       }
+      // air timing for the animation: time to impact (from the height above the floor and the vertical speed) and how close the end of the swing is
+      let landIn = 9, releaseSoon = 0;
+      if (this.state === 'air') {
+        const h = Math.max(0, rp.y - this.world.floorAt(rp.x, rp.z, rp.y, 0.3)), g = this.cfg.gravity;
+        landIn = (v.y + Math.sqrt(v.y * v.y + 2 * g * h)) / g;
+      } else if (this.state === 'swing' && this.anchor) {
+        const a = this.anchor, cy = rp.y + this.cfg.chest, tx = a.x - rp.x, ty = a.y - cy, tz = a.z - rp.z, d = Math.hypot(tx, ty, tz) || 1;
+        const away = (v.x * tx + v.z * tz) < 0; // moving away from the anchor on the far side of the arc
+        releaseSoon = away ? clamp((0.62 - ty / d) / 0.34, 0, 1) : 0; // 0 at 52 degrees from vertical, 1 at the auto-release angle
+      }
       this.rig.update(dt, {
-        speed: e.speed, speed3: Math.hypot(v.x, v.y, v.z), heading: e.heading, grounded: this.state === 'ground', vy: v.y, swinging: this.state === 'swing',
+        landIn, releaseSoon,
+        speed: e.speed, speed3: Math.hypot(v.x, v.y, v.z), heading: e.heading, px: rp.x, pz: rp.z, grounded: this.state === 'ground', vy: v.y, swinging: this.state === 'swing',
         anchorLocal: al, crouch: this.crouch, time: this.time, tension: this.tension, steer: this.state === 'swing' ? this._wish.str : 0, webSide: this.webSide
       });
     }

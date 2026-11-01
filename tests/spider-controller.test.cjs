@@ -164,3 +164,28 @@ test('render position is the simulation extrapolated by the leftover time (smoot
   const lead = t.ctrl.renderPos.z - t.ctrl.pos.z;
   assert.ok(lead > 0 && lead < 10 / 120, `lead ${lead}`);
 });
+
+test('the reel-in eases in: the rope barely shortens in the first moments and then pulls at full speed', () => {
+  const t = setup({ target: TARGET, y: 14 });
+  t.press(); t.frame(2);
+  assert.equal(t.ctrl.state, 'swing');
+  const start = t.ctrl.webLength;
+  t.frame(6); // 0.1 s
+  const early = start - t.ctrl.webLength;
+  t.frame(24); // up to ~0.5 s: past the 0.3 s ramp
+  const l1 = t.ctrl.webLength; t.frame(6);
+  const late = l1 - t.ctrl.webLength;
+  assert.ok(early < late * 0.6, `early ${early.toFixed(2)} m vs a later 0.1 s ${late.toFixed(2)} m`);
+  assert.ok(late <= physics.SPIDER.reelSpeed * 0.1 + 0.05, 'never faster than reelSpeed');
+});
+
+test('a swing that runs into a wall at speed lets go instead of staying pinned to it', () => {
+  const t = setup({ target: TARGET, y: 14 });
+  t.press(); t.frame(40);
+  assert.equal(t.ctrl.state, 'swing');
+  // a wall: pushes the body back 0.1 m and the hit removes most of its speed
+  t.ctrl.ctrl.resolveHorizontalCollision = (p) => { p.z -= 0.1; };
+  t.ctrl.vel.z = 20; t.ctrl.vel.x = 0;
+  t.frame(3);
+  assert.equal(t.ctrl.state, 'air', 'released');
+});

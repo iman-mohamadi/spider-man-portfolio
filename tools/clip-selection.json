@@ -1,0 +1,18 @@
+{
+  "_about": "Which Mixamo FBX files become game clips, and how. Read by lab.convertAnims() in tools/model-lab.html. hips: 'full' keeps the clip's hips height, 'crouchOnly' keeps only dips below standing (the physics owns body height). rootXZ: 'detrend' removes the travel but keeps the sway, 'strip' removes all of it. armSpread: degrees to turn the arms outwards (clearance for the broad chest). armRest 'align': correct the model's A-pose arms to the source T-pose before applying the clip. mirror: also write <name>M, the left/right mirror image. hand: measure which hand reaches for the web.",
+  "dir": "/content/spider-raimi/anims-src/",
+  "clips": {
+    "idle":       { "src": "Idle.fbx",                                  "hips": "full",       "rootXZ": "strip", "armRest": "align" },
+    "walk":       { "src": "Walking.fbx",                               "hips": "full",       "rootXZ": "detrend", "armRest": "align", "armSpread": 5 },
+    "run":        { "src": "Male Locomotion Pack/standard run.fbx",           "hips": "full",       "rootXZ": "detrend", "armRest": "align", "armSpread": 4 },
+    "sprint":     { "src": "Sprint.fbx",                                "hips": "full",       "rootXZ": "detrend", "armRest": "align", "armSpread": 12 },
+    "jump":       { "src": "Jumping.fbx",                               "hips": "crouchOnly", "rootXZ": "strip" },
+    "runJump":    { "src": "Running Jump.fbx",                          "hips": "crouchOnly", "rootXZ": "strip", "armRest": "align", "armSpread": 4 },
+    "fall":       { "src": "Falling Idle.fbx",                          "hips": "crouchOnly", "rootXZ": "strip" },
+    "hardLand":   { "src": "Action Adventure Pack/hard landing.fbx",    "hips": "full",       "rootXZ": "strip", "armRest": "align" },
+    "runStop":    { "src": "Action Adventure Pack/run to stop.fbx",     "hips": "full",       "rootXZ": "strip", "armRest": "align" },
+    "swingStart": { "src": "Start Swinging.fbx",                        "hips": "crouchOnly", "rootXZ": "strip", "mirror": true, "hand": true },
+    "swingLoop":  { "src": "Swinging.fbx",                              "hips": "crouchOnly", "rootXZ": "strip", "mirror": true, "hand": true },
+    "swingLand":  { "src": "Swing To Land.fbx",                         "hips": "full",       "rootXZ": "strip", "mirror": true, "hand": true }
+  }
+}
