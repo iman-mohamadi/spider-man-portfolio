@@ -385,6 +385,7 @@ class ThirdPersonControllerManager {
     }
     ent.mesh.position.copy(ent.position);
     ent.mesh.rotation.y = ent.heading;
+    if (ent.onTeleport) ent.onTeleport(ent); // optional hook for entities with their own motion state (Spider-Man)
     return { x: ent.position.x, z: ent.position.z };
   }
 
@@ -400,7 +401,7 @@ class ThirdPersonControllerManager {
     const margin = heli ? 6000 : 0;
     const entity = this.getActiveEntity();
     // Conservative body cylinders, including the taxi's corners, bicycle wheels and helicopter tail/rotor.
-    const body = { person: [0.48, 1.9], car: [2.4, 1.9], cyclist: [1.0, 1.9], helicopter: [6.2, 3.2] };
+    const body = { person: [0.48, 1.9], car: [2.4, 1.9], cyclist: [1.0, 1.9], helicopter: [6.2, 3.2], spider: [0.48, 1.9] };
     const others = Object.values(this.entities).filter(e => e !== entity).map(e => ({
       x: e.position.x, z: e.position.z, radius: body[e.type][0],
       bottom: e.position.y - (e.type === 'helicopter' ? 0.7 : 0), top: e.position.y + body[e.type][1]

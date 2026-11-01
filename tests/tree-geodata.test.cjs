@@ -6,7 +6,7 @@ const test = require('node:test');
 const { Script } = require('node:vm');
 const { gunzipSync, gzipSync } = require('node:zlib');
 
-const compressed = readFileSync(join(__dirname, '../js/tree-geodata.bin.gz'));
+const compressed = readFileSync(join(__dirname, '../js/tree-geodata.dat'));
 const source = readFileSync(join(__dirname, '../js/tree-geodata.js'), 'utf8')
   .replace('import.meta.url', JSON.stringify('https://example.test/city/js/tree-geodata.js'))
   .replace('export const REAL_TREES', 'const REAL_TREES');
@@ -15,7 +15,7 @@ const script = new Script(`(async () => { ${source}\nreturn REAL_TREES; })()`);
 function loadTrees(bytes = compressed, status = 200) {
   return script.runInNewContext({ URL, Response, DecompressionStream, Float32Array,
     fetch: async url => {
-      assert.equal(url.href, 'https://example.test/city/js/tree-geodata.bin.gz');
+      assert.equal(url.href, 'https://example.test/city/js/tree-geodata.dat');
       return new Response(bytes, { status });
     }
   });

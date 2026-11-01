@@ -5,7 +5,7 @@ const test = require('node:test');
 const { Script } = require('node:vm');
 const { gunzipSync, gzipSync } = require('node:zlib');
 
-const compressed = readFileSync(join(__dirname, '../js/building-geodata.bin.gz'));
+const compressed = readFileSync(join(__dirname, '../js/building-geodata.dat'));
 const source = readFileSync(join(__dirname, '../js/building-geodata.js'), 'utf8')
   .replace('import.meta.url', JSON.stringify('https://example.test/city/js/building-geodata.js'))
   .replace('export const REAL_BUILDINGS', 'const REAL_BUILDINGS');
@@ -14,7 +14,7 @@ const script = new Script(`(async () => { ${source}\nreturn REAL_BUILDINGS; })()
 function loadBuildings(bytes = compressed, status = 200) {
   return script.runInNewContext({ URL, Response, DecompressionStream,
     fetch: async url => {
-      assert.equal(url.href, 'https://example.test/city/js/building-geodata.bin.gz');
+      assert.equal(url.href, 'https://example.test/city/js/building-geodata.dat');
       return new Response(bytes, { status });
     }
   });

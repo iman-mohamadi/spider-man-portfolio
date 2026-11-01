@@ -174,7 +174,7 @@ const data = body[0] === 0x1f && body[1] === 0x8b
   ? new Uint8Array(await new Response(new Response(body).body.pipeThrough(new DecompressionStream('gzip'))).arrayBuffer())
   : body;
 const invalidData = () => new Error('Invalid building data.');
-if (data.length < 12) throw invalidData();
+if (data.length < 12) throw new Error(`Invalid building data: ${{response.url}} answered ${{response.status}} with ${{body.length}} bytes (type ${{response.headers?.get('content-type')}}, encoding ${{response.headers?.get('content-encoding')}}).`);
 const header = new DataView(data.buffer);
 const xStart = 12 + header.getUint32(4, true), zStart = xStart + header.getUint32(8, true);
 if (header.getUint32(0, true) !== 0x3142594e || zStart > data.length) throw invalidData();
@@ -263,7 +263,7 @@ def main():
             if key != '1000000' and 1600 <= year <= 2100:
                 years[key] = min(year, years.get(key, year))
     buildings = prepare(rows, years, args.count)
-    asset = args.output.with_suffix('.bin.gz')
+    asset = args.output.with_suffix('.dat')
     compressed = gzip.compress(pack(buildings), compresslevel=6, mtime=0)
     asset.write_bytes(compressed)
     output = module(len(buildings), asset.name, hashlib.sha256(source).hexdigest())

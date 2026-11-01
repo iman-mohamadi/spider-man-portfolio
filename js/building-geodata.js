@@ -2,7 +2,7 @@
 // NYC OTI Building Footprints: https://data.cityofnewyork.us/resource/5zhs-2jue.json
 // Snapshot SHA-256: 796136eb448bce005604b88062ab95c21a4cefeb34b53eba2ad47e3ab41b5853
 // 37,353 buildings. Coordinates: 0.5 m; roof heights: 1 m; construction years: decades (0 unknown).
-const response = await fetch(new URL('./building-geodata.bin.gz', import.meta.url));
+const response = await fetch(new URL('./building-geodata.dat', import.meta.url));
 if (!response.ok) throw new Error(`Building data request failed: ${response.status}`);
 // Servers that send .gz files as Content-Encoding: gzip hand over bytes the browser has already inflated
 const body = new Uint8Array(await response.arrayBuffer());
@@ -10,7 +10,7 @@ const data = body[0] === 0x1f && body[1] === 0x8b
   ? new Uint8Array(await new Response(new Response(body).body.pipeThrough(new DecompressionStream('gzip'))).arrayBuffer())
   : body;
 const invalidData = () => new Error('Invalid building data.');
-if (data.length < 12) throw invalidData();
+if (data.length < 12) throw new Error(`Invalid building data: ${response.url} answered ${response.status} with ${body.length} bytes (type ${response.headers?.get('content-type')}, encoding ${response.headers?.get('content-encoding')}).`);
 const header = new DataView(data.buffer);
 const xStart = 12 + header.getUint32(4, true), zStart = xStart + header.getUint32(8, true);
 if (header.getUint32(0, true) !== 0x3142594e || zStart > data.length) throw invalidData();
