@@ -102,10 +102,13 @@ test('controls text is consistent: the web is the left mouse button, Shift only 
   assert.doesNotMatch(notes, /hold \*\*Shift\*\* in the air|hold Shift in the air|Shift \(hold in the air/);
   assert.match(notes, /Left mouse button/);
   assert.match(notes, /Shift \| Sprint \(on the ground\)/);
-  // Shift is only ever read for sprinting in the controller; every web decision goes through the mouse button state
+  // Shift is a speed / parkour modifier only: sprint on the ground, a run at a facade from the ground, and on a surface the faster crawl and the press that starts a run (two reads
+  // there: the state of the key and its edge). It is never read by a web decision: every web decision goes through the mouse button state
   const shiftUses = ctrl.match(/input\.shift/g) || [];
-  assert.equal(shiftUses.length, 1);
+  assert.equal(shiftUses.length, 4);
   assert.match(ctrl, /groundVelocity\(this\.vel, w\.x, w\.z, this\.input\.shift/);
+  const webCode = ctrl.slice(ctrl.indexOf('  _webInput() {'), ctrl.indexOf('  _endSwing(letGo)')) + ctrl.slice(ctrl.indexOf('  _stepSwing(h, w) {'), ctrl.indexOf('  _respawn() {'));
+  assert.doesNotMatch(webCode, /input\.shift/, 'no web decision reads Shift');
   assert.match(ctrl, /input\.webHeld/);
   assert.match(input, /e\.button !== 0/);
 });

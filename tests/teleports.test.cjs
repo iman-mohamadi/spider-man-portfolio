@@ -43,6 +43,7 @@ test('preset and map teleports share arrival resets and mark the resolved landin
   let map;
   const environment = {
     TELEPORT_LOCATIONS,
+    portfolioPins: [],
     controllerManager: {
       teleportActiveTo: (...args) => { calls.push(['teleport', ...args]); return landed; }
     },
@@ -55,6 +56,7 @@ test('preset and map teleports share arrival resets and mark the resolved landin
     trafficSystem: {},
     NYCMapSystem: class {
       constructor(options) { this.onTeleport = options.onTeleport; map = this; }
+      setPortfolioPins(pins) { this.pins = pins; }
     },
     teleportButtons: Object.keys(TELEPORT_LOCATIONS).map((key) => ({
       getAttribute: () => key,

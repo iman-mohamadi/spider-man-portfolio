@@ -1,5 +1,6 @@
 import * as THREE from 'three/webgpu';
 import { clamp, lerp, smoothstep, gaitParams, footTrajectory, twoBoneIK, GAIT } from './spider-gait.js';
+import { createFreefall, diveTargets, phalanxCurl } from './spider-freefall.js';
 
 // Procedural animation for the Spider-Man rig (the glTF has no clips and its bone axes are irregular, so a clip would need a full
 // retarget first). Bones are never rotated by Euler angles: each limb segment is AIMED in model space (+Y up, +Z forward, +X the
@@ -11,7 +12,14 @@ import { clamp, lerp, smoothstep, gaitParams, footTrajectory, twoBoneIK, GAIT } 
 //  * torso  - pelvis and spine twist, roll and lean from the gait phase, forward acceleration and turning;
 //  * arms   - counter-swing in the torso's frame, elbows flexed with speed;
 //  * air    - pose from vertical speed (rise / float / fall) with the whole body tilted along the velocity;
+//  * dive   - the headfirst freefall (spider-freefall.js): a state machine and a target pose, blended into the air pose (see blendDive) and, for the fingers, applied by handPose.
 //  * swing  - the web arm points at the anchor, the body hangs from the rope and banks into steering, rope tension stretches the pose.
+//  * cling  - climbing a wall or a ceiling: all four limbs on the surface. The body's own frame is the usual one (+Z = the chest, which faces the surface); the body-frame group below
+//    turns it onto the surface. Feet and hands are placed ON the surface plane (the distance is st.clingOffset) with a diagonal gait (left hand + right foot, then the other pair) along
+//    the head direction, at a rate set by the crawl speed; at rest every limb is planted. The arms are solved with two-bone IK to the hand targets, the legs by the usual leg IK.
+//  * body frame - a group between `visual` and the model that carries what is bigger than a pose: the somersault of the double jump (a full turn about the chest, pitch only) and
+//    the alignment with a wall while wall running (the body's up turns towards the wall normal, its forward follows the travel). It is smoothed on its own, so the existing tilt and
+//    every clip / pose underneath it are untouched; with nothing active it is the identity.
 
 const smooth = (cur, target, dt, rate) => cur + (target - cur) * (1 - Math.exp(-dt * rate));
 const angleDiff = (a, b) => { let d = (b - a) % (Math.PI * 2); if (d > Math.PI) d -= Math.PI * 2; if (d <= -Math.PI) d += Math.PI * 2; return d; };
@@ -46,7 +54,7 @@ function findBones(root) {
 
 // ---- pose vector layout (one Float32Array per pose, blended linearly, then arms / up are re-normalised)
 const FOOT = 0, POLE = 6, FPITCH = 12, ARM = 14; // foot targets (L, R xyz), knee poles, foot pitch (L, R), arms: upperL foreL upperR foreR (xyz, torso frame)
-const PELVIS = 26, SPINE = 29, HEAD = 32, HIPS = 35, BODY = 38, UP = 40, NP = 43; // (yaw, roll, pitch) triples, hips offset, body (pitch, roll), up vector
+const PELVIS = 26, SPINE = 29, HEAD = 32, HIPS = 35, BODY = 38, UP = 40, HAND = 43, NP = 49; // HAND: hand targets (L, R xyz) of the climbing pose; (yaw, roll, pitch) triples, hips offset, body (pitch, roll), up vector
 const newPose = () => new Float32Array(NP);
 const setV = (P, i, x, y, z) => { P[i] = x; P[i + 1] = y; P[i + 2] = z; };
 const setUnit = (P, i, x, y, z) => { const m = Math.hypot(x, y, z) || 1; P[i] = x / m; P[i + 1] = y / m; P[i + 2] = z / m; };
@@ -98,6 +106,13 @@ function createSpiderRig({ root, visual }) {
   const standHip = thigh0[0].y - ankleH, reach = (thighLen + shankLen) * 0.985;
   const hipDrop = hip0.y - thigh0[0].y; // the thigh joint sits this far below the hip centre (0.072 m in the original model)
   const lengths = { thigh: thighLen, shank: shankLen, ankleH, standHip };
+  const shoulder0 = [bindPos.get(rig.L.upper).clone(), bindPos.get(rig.R.upper).clone()];
+  const upperLen = (dist(bindPos.get(rig.L.upper), bindPos.get(rig.L.fore)) + dist(bindPos.get(rig.R.upper), bindPos.get(rig.R.fore))) / 2;
+  const foreLen = (dist(bindPos.get(rig.L.fore), bindPos.get(rig.L.hand)) + dist(bindPos.get(rig.R.fore), bindPos.get(rig.R.hand))) / 2;
+  lengths.upperArm = upperLen; lengths.foreArm = foreLen;
+  const flipper = new THREE.Group(); // the body frame (see the header): visual -> flipper -> model root
+  flipper.name = 'BodyFrame';
+  if (root.parent) { root.parent.add(flipper); flipper.add(root); }
 
   // the hips' local position is in the units of its parent: metres in the original model, centimetres under a scaled root in the Mixamo one
   const localPerMetre = 1 / (rig.hips.parent ? rig.hips.parent.getWorldScale(new V3()).x : 1);
@@ -114,12 +129,14 @@ function createSpiderRig({ root, visual }) {
   const euler = new THREE.Euler();
   const yrp = (out, yaw, roll, pitch) => out.setFromEuler(euler.set(pitch, yaw, roll, 'YZX')); // R = Ry * Rz * Rx (pitch positive = leaning forward)
 
-  const G = newPose(), A = newPose(), W = newPose(), P = newPose(); // ground (idle + gait), air, swing, blended
+  const G = newPose(), A = newPose(), W = newPose(), Cp = newPose(), P = newPose(), D = newPose(); // ground (idle + gait), air, swing, cling, blended; D: the dive target
+  const ff = createFreefall(), DV = {}; // the freefall layer (state machine) and the latest target pose it asked for
   const gp = {}, trL = {}, trR = {};
   const S = {
     wG: 1, wA: 0, wS: 0, wGait: 0, phase: 0, crouch: 0, airSide: 1, webSide: 1, wasGrounded: true, init: false,
     prevHeading: 0, prevSpeed: 0, yawRate: 0, accel: 0, fall: 0, rise: 0, tension: 0.6, steer: 0, upk: 0, webDir: new V3(0, 1, 0), hasWebDir: false, airVy: 0, airHs: 0, short: [0, 0], px: 0, pz: 0, h: 0, lockOn: false,
-    airTime: 0, jumped: false, landIn: 9, cameFromSwing: false, sinceRelease: 0, wasSwinging: false, swingVy: 0, relSoon: 0
+    airTime: 0, jumped: false, landIn: 9, cameFromSwing: false, sinceRelease: 0, wasSwinging: false, swingVy: 0, relSoon: 0,
+    airJumpId: undefined, wq: new THREE.Quaternion(), wFlip: 0, haveWall: false, wC: 0, cph: 0, cmove: 0
   };
   // Foot locking: while a foot is in stance its ankle is pinned to a WORLD position (set at touch-down). The foot target in model space is then
   // recomputed from the body's current position and heading every frame, so turning, braking or accelerating cannot drag a planted foot.
@@ -127,6 +144,7 @@ function createSpiderRig({ root, visual }) {
   const Y = new V3(0, 1, 0), pivot = new V3(0, 1.0, 0), off = new V3(), anchorS = new V3(), upV = new V3(), qTarget = new Q(), qAlign = new Q(), qInv = new Q();
   const qPelvis = new Q(), qTorso = new Q(), qSwingT = new Q(), hv = new V3(), fv = new V3(), pv = new V3(), dirT = new V3(), ik = {};
   const X = new V3(1, 0, 0), Z = new V3(0, 0, 1);
+  const shv = new V3(), armIK = [{}, {}]; // the shoulder, and the arm IK results (the 'thigh' / 'shank' of twoBoneIK are the upper arm and the forearm)
 
   // model-space ankle target (x, z) for foot k from its gait trajectory, with the stance part locked in the world (see `feet`)
   const ft = { x: 0, z: 0 };
@@ -267,6 +285,29 @@ function createSpiderRig({ root, visual }) {
     // whole-body tilt: head leads the motion, bounded so a vertical fall stays upright, relaxed again for the landing
     const e = Math.atan2(vy, Math.max(hs, 0.001));
     A[BODY] = hsK * clamp((Math.PI / 2 - e) * 0.3, -0.15, 0.55) * (1 - 0.7 * wP) + 0.12 * wT; A[BODY + 1] = turn * 0.6; setV(A, UP, 0, 1, 0);
+    if (ff.state.wBody > 1e-4) blendDive(ff.state);
+  }
+
+  // ---------------------------------------------------------------- dive: the target pose of spider-freefall.js blended into the air pose, part by part (the head first, then the chest and
+  // pelvis, the arms, the legs last on the way in; the reverse on the way out). Directions are blended on the sphere, angles linearly; the body's pitch goes through the body
+  // quaternion's slerp in updatePose, so no Euler angle is ever interpolated through a large rotation.
+  function blendDive(fs) {
+    diveTargets(fs, DV);
+    const legLen = thighLen + shankLen, hy = hip0.y, fz = hip0.z;
+    for (let s = 0; s < 2; s++) {
+      const side = s === 0 ? 1 : -1, o = s * 3, f = DV.foot[s], a = DV.arm[s], ao = ARM + (s === 0 ? 0 : 6);
+      setV(D, FOOT + o, side * f.x, hy + DV.hipsY - hipDrop - f.reach * legLen, fz + f.z); // behind the pelvis, along the body axis, the knee slightly bent
+      setUnit(D, POLE + o, side * DV.poleX, 0, 1); D[FPITCH + s] = f.pitch;
+      setUnit(D, ao, a.u[0], a.u[1], a.u[2]); setUnit(D, ao + 3, a.f[0], a.f[1], a.f[2]);
+    }
+    for (let i = FOOT; i < FOOT + 6; i++) A[i] = lerp(A[i], D[i], fs.wLegs);
+    A[FPITCH] = lerp(A[FPITCH], D[FPITCH], fs.wLegs); A[FPITCH + 1] = lerp(A[FPITCH + 1], D[FPITCH + 1], fs.wLegs);
+    slerpInto(A, POLE, D, fs.wLegs); slerpInto(A, POLE + 3, D, fs.wLegs);
+    for (const o of [ARM, ARM + 3, ARM + 6, ARM + 9]) slerpInto(A, o, D, fs.wArms);
+    const set3 = (i, a, b, c, w) => { A[i] = lerp(A[i], a, w); A[i + 1] = lerp(A[i + 1], b, w); A[i + 2] = lerp(A[i + 2], c, w); };
+    set3(PELVIS, DV.pelvis[0], DV.pelvis[1], DV.pelvis[2], fs.wBody); set3(SPINE, DV.spine[0], DV.spine[1], DV.spine[2], fs.wBody);
+    set3(HEAD, DV.head[0], DV.head[1], DV.head[2], fs.wHead); set3(HIPS, 0, DV.hipsY, 0, fs.wBody);
+    A[BODY] = lerp(A[BODY], DV.bodyPitch, fs.wBody); A[BODY + 1] = lerp(A[BODY + 1], 0, fs.wBody);
   }
 
   // ---------------------------------------------------------------- swing: hanging from the rope like a pendulum
@@ -312,8 +353,71 @@ function createSpiderRig({ root, visual }) {
     setUnit(W, fo + 3, free * 0.3, -0.65 + 0.9 * coil, -0.2 - 0.75 * sp * (1 - coil) + 0.7 * coil);
   }
 
+  // ---------------------------------------------------------------- cling: climbing with all four limbs on the surface
+  const STEP_H = 0.21, STEP_F = 0.2; // half strides of the hands and the feet (m along the head direction)
+  const lm = { a: 0, lift: 0 };
+  function limb(ph, amp) { // along-the-head offset and lift off the surface of a limb at gait phase ph: swing (reaching ahead, lifted) for the first half, then stance (moving back at the speed of the body)
+    const u = ph - Math.floor(ph);
+    if (u < 0.5) { const t = u / 0.5, e = t * t * (3 - 2 * t); lm.a = -amp + 2 * amp * e; lm.lift = Math.sin(Math.PI * t); }
+    else { const t = (u - 0.5) / 0.5; lm.a = amp - 2 * amp * t; lm.lift = 0; }
+    return lm;
+  }
+  function poseCling(st, dt) {
+    const off = st.clingOffset ?? 0.5, sp = st.speed || 0;
+    S.cmove = smooth(S.cmove, smoothstep(0.1, 0.6, sp), dt, 10);
+    // the gait rate follows the crawl speed (planted at rest); past 3.2 steps a second the stride gets longer instead (up to the reach of the arms and legs), so the planted hands and feet slide less
+    const stride = clamp(sp / (4 * 3.2), STEP_F, 1.6 * STEP_F), sA = stride / STEP_F;
+    if (sp > 0.12) S.cph = (S.cph + dt * Math.min(3.2, sp / (4 * stride))) % 1;
+    const k = S.cmove, hipsY = -0.10, hy = hip0.y + hipsY - hipDrop; // hy = height of the thigh joints
+    // the climb over a roof edge (st.mantle: progress 0..1 of the whole climb, split at st.mantleSplit): first the hands go up to the edge, then the body goes over it
+    const mu = st.mantle ?? -1, sp1 = st.mantleSplit || 0.5, m1 = mu < 0 ? 0 : clamp(mu / sp1, 0, 1), m2 = mu < 0 ? 0 : clamp((mu - sp1) / (1 - sp1), 0, 1);
+    const sh = Math.abs(shoulder0[0].x) + 0.14, shY = shoulder0[0].y + hipsY + 0.32 + 0.30 * m1 - 0.55 * m2; // the hands reach up and apart, not boxing in front of the chest
+    for (let side = 1; side >= -1; side -= 2) {
+      const L = side > 0, o = L ? 0 : 3;
+      // diagonal gait: left hand with the right foot
+      const h = limb(S.cph + (L ? 0 : 0.5), STEP_H * sA), ha = h.a * k * (1 - m1), hl = h.lift * k * (1 - m1);
+      setV(Cp, HAND + o, side * sh, shY + ha, off - 0.03 - 0.12 * hl + 0.45 * m2); // mantle: the hands come down onto the roof, beyond the wall plane
+      const f = limb(S.cph + (L ? 0.5 : 0), STEP_F * sA), fa = f.a * k * (1 - m1), fl = f.lift * k * (1 - m1);
+      setV(Cp, FOOT + o, side * 0.2, hy - 0.58 + fa + 0.03 * fl + 0.40 * m2, off - 0.12 - 0.08 * fl + 0.22 * m2); // ... and the knees come up onto it
+      setV(Cp, POLE + o, side * 0.45, 0, 1); // the knees go forward and out
+      Cp[FPITCH + (L ? 0 : 1)] = -1.35 + 0.12 * fl; // the soles flat on the surface (toes up)
+      armSwing(Cp, side, 2.5, 0.4, 0.3); // the fallback direction of the arms (the hand IK replaces it)
+    }
+    const ph = S.cph * Math.PI * 2, sway = Math.sin(ph) * k;
+    const lean = clamp(S.accel * 0.004, -0.15, 0.15); // the chest leans into a start and back into a stop (weight transfer)
+    Cp[HIPS] = 0.02 * sway; Cp[HIPS + 1] = hipsY; Cp[HIPS + 2] = 0.07 + 0.2 * m2;
+    Cp[PELVIS] = 0.06 * sway; Cp[PELVIS + 1] = 0.03 * Math.cos(ph) * k; Cp[PELVIS + 2] = 0.2 + 0.25 * m2;
+    Cp[SPINE] = -0.09 * sway; Cp[SPINE + 1] = -0.03 * Math.cos(ph) * k; Cp[SPINE + 2] = 0.3 + lean + 0.45 * m2;
+    Cp[HEAD] = 0.05 * sway; Cp[HEAD + 1] = 0; Cp[HEAD + 2] = -0.55; // looks up the surface
+    Cp[BODY] = 0; Cp[BODY + 1] = 0; setV(Cp, UP, 0, 1, 0);
+  }
+
+  // ---------------------------------------------------------------- body frame: somersault and wall alignment
+  const FLIP_TIME = 0.6; // s for the full turn of the double jump
+  const pivotF = new V3(0, 1.0, 0), offF = new V3(), uW = new V3(), fW = new V3(), xW = new V3(), qMesh = new Q(), qWorld = new Q(), qLoc = new Q(), qFlipQ = new Q(), qId = new Q(), basis = new THREE.Matrix4();
+  function bodyFrame(dt, st) {
+    dt = clamp(dt, 1e-4, 0.1);
+    const wall = (st.wallRun || st.cling) && st.wall && st.wall.active !== false ? st.wall : null;
+    // the wall alignment: the target is the body frame (up away from the wall, forward along the travel) expressed relative to the mesh and the tilt group; smoothed, never snapped
+    if (wall) {
+      uW.set(wall.ux, wall.uy, wall.uz); fW.set(wall.fx, wall.fy, wall.fz); xW.crossVectors(uW, fW).normalize();
+      basis.makeBasis(xW, uW, fW); qWorld.setFromRotationMatrix(basis);
+      qMesh.setFromAxisAngle(Y, st.heading ?? 0).multiply(visual.quaternion);
+      qLoc.copy(qMesh).invert().multiply(qWorld);
+      if (!S.haveWall) { S.wq.identity(); S.haveWall = true; }
+    }
+    S.wq.slerp(wall ? qLoc : qId.identity(), 1 - Math.exp(-dt * (wall ? (wall.rate || 12) : 7)));
+    // the somersault of a second jump: pitch only, forward, a smooth full turn; it is scaled away quickly when the body lands before it ends
+    const t = st.airJumpT ?? -1, flying = !st.grounded && !st.swinging && !st.wallRun && !st.cling;
+    S.wFlip += ((t >= 0 && flying ? 1 : 0) - S.wFlip) * (1 - Math.exp(-dt * ((t >= 0 && flying) ? 40 : 16)));
+    const u = clamp(t / FLIP_TIME, 0, 1), angle = t >= 0 ? Math.PI * 2 * u * u * (3 - 2 * u) * S.wFlip : 0;
+    qFlipQ.setFromAxisAngle(X, angle);
+    flipper.quaternion.copy(S.wq).multiply(qFlipQ);
+    offF.copy(pivotF).applyQuaternion(flipper.quaternion); flipper.position.copy(pivotF).sub(offF); // turns about the chest
+  }
+
   // ---------------------------------------------------------------- per-frame update
-  function update(dt, st) {
+  function updatePose(dt, st) {
     dt = clamp(dt, 1e-4, 0.1);
     memo.clear();
     if (st.anchorLocal) anchorS.copy(st.anchorLocal).applyQuaternion(qInv.copy(visual.quaternion).invert()).normalize(); // anchor direction in model space (before this frame's tilt)
@@ -327,13 +431,18 @@ function createSpiderRig({ root, visual }) {
     S.webSide = st.webSide || S.webSide;
 
     // state weights (smoothed in time, so an attach, a release or a landing blends instead of snapping)
-    const tG = grounded ? 1 : 0, tS = swinging ? 1 : 0, tA = grounded || swinging ? 0 : 1;
-    S.wG = smooth(S.wG, tG, dt, tG > S.wG ? 7 : 10); S.wA = smooth(S.wA, tA, dt, 8); S.wS = smooth(S.wS, tS, dt, S.wS > tS ? 6 : 10);
+    const tG = grounded ? 1 : 0, tS = swinging ? 1 : 0, tC = st.cling ? 1 : 0, tA = grounded || swinging || st.cling ? 0 : 1;
+    const diving = ff.state.wBody > 0.001; // the air pose (with the dive in it) takes over from the ground pose at once: the clip rig only runs this layer while something needs it
+    S.wG = smooth(S.wG, tG, dt, tG > S.wG ? 7 : diving ? 40 : 10); S.wA = smooth(S.wA, tA, dt, diving && tA > S.wA ? 30 : 8); S.wS = smooth(S.wS, tS, dt, S.wS > tS ? 6 : 10); S.wC = smooth(S.wC, tC, dt, tC > S.wC ? 9 : 7);
     S.crouch = smooth(S.crouch, st.crouch || 0, dt, 18);
     S.wGait = smooth(S.wGait, smoothstep(0.1, 0.9, speed), dt, 16);
     gaitParams(speed, gp);
     if (grounded && S.wGait > 0.02) S.phase += dt * gp.freq; else if (S.wGait < 0.02) S.phase = 0.12;
     S.phase -= Math.floor(S.phase);
+    if (st.airJumpId !== undefined) {
+      if (S.airJumpId === undefined) S.airJumpId = st.airJumpId;
+      else if (st.airJumpId !== S.airJumpId) { S.airJumpId = st.airJumpId; S.jumped = true; S.airTime = 0; S.cameFromSwing = false; S.sinceRelease = 0; S.airSide = -S.airSide; } // the second jump: the push-off pose again, the other leg leads
+    }
     if (S.wasGrounded && !grounded && !swinging) { // leaving the ground: the foot that was swinging leads; a jump (not a walk-off) gets the push-off pose
       S.airSide = trL.stance ? -1 : 1; S.jumped = st.vy > 3; S.airTime = 0; S.cameFromSwing = false; S.sinceRelease = 0;
     }
@@ -348,17 +457,18 @@ function createSpiderRig({ root, visual }) {
 
     // ----- poses
     S.px = st.px ?? 0; S.pz = st.pz ?? 0; S.h = st.heading ?? 0;
-    S.lockOn = st.px !== undefined && grounded && S.wGait > 0.05; // foot locking needs the body's world position
+    S.lockOn = st.px !== undefined && grounded && !st.wallRun && S.wGait > 0.05; // foot locking needs the body's world position (and a floor: not on a wall)
     if (!grounded) { S.airVy = st.vy; S.airHs = speed; }
-    poseGround(st, dt); poseAir(st); poseSwing(st);
-    const sum = S.wG + S.wA + S.wS || 1, wG = S.wG / sum, wA = S.wA / sum, wS = S.wS / sum;
-    for (let i = 0; i < NP; i++) P[i] = G[i] * wG + A[i] * wA + W[i] * wS;
+    poseGround(st, dt); poseAir(st); poseSwing(st); poseCling(st, dt);
+    const sum = S.wG + S.wA + S.wS + S.wC || 1, wG = S.wG / sum, wA = S.wA / sum, wS = S.wS / sum, wC = S.wC / sum;
+    for (let i = 0; i < NP; i++) P[i] = G[i] * wG + A[i] * wA + W[i] * wS + Cp[i] * wC;
     // arm directions and the up vector: spherical blend of the three poses (ground first, then air, then swing)
     for (const o of [ARM, ARM + 3, ARM + 6, ARM + 9, UP]) {
       P[o] = G[o]; P[o + 1] = G[o + 1]; P[o + 2] = G[o + 2];
       let acc = wG;
       if (wA > 1e-4) { slerpInto(P, o, A, wA / (acc + wA)); acc += wA; }
       if (wS > 1e-4) { slerpInto(P, o, W, wS / (acc + wS)); acc += wS; }
+      if (wC > 1e-4) { slerpInto(P, o, Cp, wC / (acc + wC)); acc += wC; }
     }
     for (const o of [POLE, POLE + 3]) setUnit(P, o, P[o], P[o + 1], P[o + 2]);
 
@@ -399,11 +509,75 @@ function createSpiderRig({ root, visual }) {
       setWorld(leg.ankle, qa.setFromAxisAngle(X, P[FPITCH + s]).multiply(bindQ.get(leg.ankle)));
     }
     // arms: torso-frame directions carried into model space
-    const arm = (bone, o) => { tv.set(P[ARM + o], P[ARM + o + 1], P[ARM + o + 2]).applyQuaternion(qTorso); aim(bone, tv.x, tv.y, tv.z); };
-    arm(rig.L.upper, 0); arm(rig.L.fore, 3); arm(rig.R.upper, 6); arm(rig.R.fore, 9);
+    // climbing: the hands are on the surface, found by two-bone IK from the shoulders (their place follows the pelvis and the spine); blended in with the cling weight
+    const wCn = wC;
+    if (wCn > 0.01) {
+      for (let s2 = 0; s2 < 2; s2++) {
+        shv.copy(shoulder0[s2]).sub(hip0).applyQuaternion(qTorso).add(hip0).add(off);
+        fv.set(Cp[HAND + 3 * s2], Cp[HAND + 3 * s2 + 1], Cp[HAND + 3 * s2 + 2]);
+        pv.set(s2 === 0 ? 1 : -1, -0.5, -0.7); // the elbows go out and down, back from the wall
+        twoBoneIK(shv, fv, upperLen, foreLen, pv, armIK[s2]);
+      }
+    }
+    const arm = (bone, o, s2, which) => {
+      tv.set(P[ARM + o], P[ARM + o + 1], P[ARM + o + 2]).applyQuaternion(qTorso);
+      if (wCn > 0.01) { const d = armIK[s2][which]; tv.x += (d.x - tv.x) * wCn; tv.y += (d.y - tv.y) * wCn; tv.z += (d.z - tv.z) * wCn; tv.normalize(); }
+      aim(bone, tv.x, tv.y, tv.z);
+    };
+    arm(rig.L.upper, 0, 0, 'thigh'); arm(rig.L.fore, 3, 0, 'shank'); arm(rig.R.upper, 6, 1, 'thigh'); arm(rig.R.fore, 9, 1, 'shank');
   }
 
-  return { enabled: true, update, rig, state: S, pose: P, lengths, gait: gp, airWeights: aw };
+  // ---------------------------------------------------------------- hands and fingers
+  // The clips and the arm IK never aim the wrists or the fingers, so they keep whatever the underlying clip left there: curled claws on the wall, a twisted wrist on the web arm.
+  // handPose() runs after everything else: it turns the wrist so the palm lies on the climbing surface with the fingers up the surface (spread slightly), and relaxes the
+  // fingers towards the bind pose (an open hand), the web hand of a swing included. Weights are 0..1.
+  const hands = [rig.L, rig.R].map((s, i) => {
+    const kids = []; s.hand.traverse((o) => { if (o !== s.hand && o.isBone) kids.push({ b: o, q: o.quaternion.clone() }); });
+    const mid = kids.find((k) => /middle1?$/i.test(k.b.name) && k.b.parent === s.hand) || kids.find((k) => k.b.parent === s.hand);
+    // the bind frame of the hand: fingers = from the wrist to the knuckles, palm = down in the bind pose (the Mixamo T-pose)
+    const f = mid ? mid.b.getWorldPosition(new V3()).sub(bindPos.get(s.hand)).normalize() : new V3(i ? -1 : 1, 0, 0);
+    const n = new V3(0, -1, 0); n.addScaledVector(f, -n.dot(f)).normalize();
+    const Mb = new THREE.Matrix4().makeBasis(f, n, new V3().crossVectors(f, n));
+    // the fingers (optional: a rig without finger bones simply has none): chains of up to three phalanxes under the wrist, the corrective `_adj_` and `_end` bones left alone; each curls about
+    // the axis (finger direction x palm normal) given in the frame of the phalanx's parent, from the bind pose
+    const fingers = [];
+    for (const root of s.hand.children) {
+      if (!root.isBone || /adj|_end$|End/i.test(root.name)) continue;
+      const chain = [root]; for (let b = root; chain.length < 3;) { const nx = b.children.find((c) => c.isBone && !/adj|_end$|End/i.test(c.name)); if (!nx) break; chain.push(nx); b = nx; }
+      const nxt = chain[1] || root.children.find((c) => c.isBone); if (!nxt) continue;
+      const d = nxt.getWorldPosition(new V3()).sub(root.getWorldPosition(new V3())).normalize(), axisW = new V3().crossVectors(d, n).normalize();
+      if (!(axisW.lengthSq() > 0.5)) continue;
+      fingers.push({ index: /thumb/i.test(root.name) ? 0 : fingers.length + 1, bones: chain.map((b) => ({ bone: b, q0: b.quaternion.clone(), axis: axisW.clone().applyQuaternion(b.parent.getWorldQuaternion(new Q()).invert()) })) });
+    }
+    return { bone: s.hand, kids, Mb, side: i ? -1 : 1, q0: s.hand.quaternion.clone(), fingers };
+  });
+  const Mt = new THREE.Matrix4(), Rm = new THREE.Matrix4(), qHand = new Q(), qPar = new Q(), fT = new V3(), nT = new V3(0, 0, 1);
+  const relQ = (o, out) => { out.identity(); for (let p = o; p && p !== root; p = p.parent) out.premultiply(p.quaternion); return out; }; // rotation of o relative to the model root
+  const qCurl = new Q();
+  function handPose(wCling, wWeb, webSide, fs = null) {
+    for (let i = 0; i < 2; i++) {
+      const H = hands[i], web = (webSide > 0) === (i === 0), wFing = Math.max(wCling * 0.9, web ? wWeb * 0.75 : 0);
+      if (wCling > 0.01) {
+        fT.set(-H.side * 0.28, 1, 0).normalize(); // up the surface, a little towards the middle (the fingers of the left hand lean right)
+        Mt.makeBasis(fT, nT, new V3().crossVectors(fT, nT));
+        Rm.copy(H.Mb).invert().premultiply(Mt); // Mt * Mb^-1
+        qHand.setFromRotationMatrix(Rm).multiply(bindQ.get(H.bone));
+        relQ(H.bone.parent, qPar);
+        qHand.premultiply(qPar.invert());
+        H.bone.quaternion.slerp(qHand, wCling);
+      }
+      if (wFing > 0.01) for (const k of H.kids) k.b.quaternion.slerp(k.q, wFing);
+      if (fs && fs.wArms > 0.01 && DV.curlMicro) { // the dive: the wrist follows the forearm, the fingers curl a little (blended from the pose they have this frame)
+        H.bone.quaternion.slerp(H.q0, DV.hand * fs.wArms);
+        for (const F of H.fingers) F.bones.forEach((fb, j) => { qCurl.setFromAxisAngle(fb.axis, phalanxCurl(DV.curl, DV.curlMicro[i], F.index, j)).multiply(fb.q0); fb.bone.quaternion.slerp(qCurl, fs.wArms * 0.9); });
+      }
+    }
+  }
+
+  /** The pose and the body frame: what the procedural-only rig runs every frame. (The clip rig calls updatePose when it needs the procedural layer, and bodyFrame every frame.) */
+  function update(dt, st) { ff.update(dt, st); updatePose(dt, st); bodyFrame(dt, st); handPose(S.wC, S.wS, st.webSide, ff.state); }
+
+  return { enabled: true, update, updatePose, bodyFrame, handPose, freefall: ff, flipper, rig, state: S, pose: P, lengths, gait: gp, airWeights: aw };
 }
 
 export { createSpiderRig, findBones };

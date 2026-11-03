@@ -20,7 +20,10 @@ const CFG = {
   followRateSwing: 1.2, followIdle: 0.6, followMinSpeed: 6, followMaxAngle: 0.55,
   minDistance: 1.1, wallPad: 0.55, groundPad: 0.45,
   pivotRate: 14, pivotRateSpeed: 10, // pivot follow rate; it tightens with speed so the character stays near the frame centre at 40 m/s
-  frameUpSwing: 0.75 // while swinging the character sits lower in the frame, leaving room above for the next anchor
+  frameUpSwing: 0.75, // while swinging the character sits lower in the frame, leaving room above for the next anchor
+  // on a wall (running or crawling): a little further back so the wall and where he is going can be seen, lower in the frame like a swing (room above for a climb), and a gentle turn
+  // towards the wall (crawling) or the direction of the run, only while the mouse is idle and only when the camera already looks roughly that way (never against the player)
+  wallDistance: 1.2, wallFrameUp: 0.6, wallYawRate: 0.7, wallYawMax: 1.25, wallBlend: 3
 };
 
 const smoothstep = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
@@ -44,6 +47,7 @@ class SpiderCamera {
     this.ahead = new THREE.Vector3();
     this.vyBias = 0;
     this.frameUp = CFG.frameUp;
+    this.wallK = 0; // 0..1: how much of the wall behaviour is on (eased in and out, so a wall jump or a landing gives the camera back smoothly)
     this.pos = new THREE.Vector3();
     this.look = new THREE.Vector3();
     this.view = { px: 0, py: 0, pz: 0, fx: 0, fy: 0, fz: 1 }; // camera position and unit forward (the crosshair ray), for web targeting
@@ -62,6 +66,9 @@ class SpiderCamera {
 
   _enter() {
     this.active = true;
+    this.input?.rearm?.();
+    this.cs.dragEnabled = false; // Spider-Man looks with the locked mouse; the generic drag-to-orbit must not run beside it
+    this.cs._clearPointers?.(); this.cs.isDragging = false;
     this.yaw = this.entity.heading;
     this.pitch = CFG.pitchDefault;
     this.snapNext = true;
@@ -69,6 +76,8 @@ class SpiderCamera {
 
   _exit() {
     this.active = false;
+    this.cs.dragEnabled = true; // hand the mouse back to the other characters' drag-to-orbit, from a clean state
+    this.cs._clearPointers?.(); this.cs.isDragging = false; this.cs.userOrbitTimer = 0;
     const p = this.cs.getActivePreset(), cam = this.cs.camera;
     cam.fov = p.fov;
     cam.updateProjectionMatrix();
@@ -94,6 +103,8 @@ class SpiderCamera {
 
     const c = this.controller, v = c.vel, speed3 = Math.hypot(v.x, v.y, v.z), hs = Math.hypot(v.x, v.z);
     const swinging = c.swinging, speedK = smoothstep(CFG.speedLo, CFG.speedHi, speed3);
+    const onWall = c.state === 'wall', onCling = c.state === 'cling', onSurface = onWall || onCling;
+    this.wallK = this.snapNext ? (onSurface ? 1 : 0) : damp(this.wallK, onSurface ? 1 : 0, CFG.wallBlend, dt);
 
     // ----- follow: the camera never turns by itself on the ground or in the air (that is how a camera ends up fighting the aim). The only
     // automatic yaw is while swinging, and only a gentle nudge towards the travel direction when it is already within ~30 degrees of where the
@@ -102,6 +113,16 @@ class SpiderCamera {
     if (swinging && idle && hs > CFG.followMinSpeed) {
       const diff = angleDiff(this.yaw, Math.atan2(v.x, v.z));
       if (Math.abs(diff) < CFG.followMaxAngle) this.yaw += diff * (1 - Math.exp(-CFG.followRateSwing * clamp((hs - CFG.followMinSpeed) / 10, 0, 1) * dt));
+    }
+
+    // ----- on a wall: turn gently to see it. Crawling: towards the wall (it ends up in front of the camera, the crawl keys match the screen); running: along the run. Never while the mouse is
+    // moving, never more than wallYawMax from where the player is looking, and eased by wallK (rate wallYawRate per second)
+    if (this.wallK > 0.05 && idle) {
+      let target = null;
+      if (onWall && hs > CFG.followMinSpeed) target = Math.atan2(v.x, v.z);
+      else if (onCling && Math.abs(c.surf.ny) < 0.7) target = Math.atan2(-c.surf.nx, -c.surf.nz);
+      else if (onWall) target = Math.atan2(-c.wall.nx, -c.wall.nz);
+      if (target !== null) { const diff = angleDiff(this.yaw, target); if (Math.abs(diff) < CFG.wallYawMax) this.yaw += diff * (1 - Math.exp(-CFG.wallYawRate * this.wallK * dt)); }
     }
 
     // ----- pivot: above the head, smoothed, leading the motion
@@ -121,7 +142,7 @@ class SpiderCamera {
       pv.x = damp(pv.x, tx, pr, dt); pv.z = damp(pv.z, tz, pr, dt);
       pv.y = damp(pv.y, ty, ty > pv.y ? 5.5 : 9, dt); // rises slower than it falls: a jump leaves the frame centre, a fall is followed closely
     }
-    this.frameUp = this.snapNext ? CFG.frameUp : damp(this.frameUp, swinging ? CFG.frameUpSwing : CFG.frameUp, 2.5, dt);
+    this.frameUp = this.snapNext ? CFG.frameUp : damp(this.frameUp, swinging ? CFG.frameUpSwing : this.wallK > 0.5 ? CFG.wallFrameUp : CFG.frameUp, 2.5, dt);
     const ax = pv.x + this.ahead.x * 0.6, ay = pv.y + this.frameUp + this.vyBias, az = pv.z + this.ahead.z * 0.6;
 
     // ----- view direction and desired camera position
@@ -129,7 +150,7 @@ class SpiderCamera {
     const fx = Math.sin(this.yaw) * cp, fy = -sp, fz = Math.cos(this.yaw) * cp;
     const rx = -Math.cos(this.yaw), rz = Math.sin(this.yaw); // camera right (horizontal)
     const fall = smoothstep(6, 30, -v.y);
-    const wantDist = (CFG.distance + CFG.distanceSpeed * speedK + CFG.distanceFall * fall + (swinging ? 0.5 : 0)) * zoom;
+    const wantDist = (CFG.distance + CFG.distanceSpeed * speedK + CFG.distanceFall * fall + (swinging ? 0.5 : 0) + CFG.wallDistance * this.wallK) * zoom;
     this.dist = this.snapNext ? wantDist : damp(this.dist, wantDist, 2.4, dt);
     const sh = CFG.shoulder * clamp(this.dist / CFG.distance, 0.4, 1.4) * (this.dist < 2 ? this.dist / 2 : 1);
     let d = this.dist;

@@ -21,6 +21,8 @@ class SpiderInput {
     this.shift = false;
     this.webHeld = false;
     this.lockFailed = typeof canvas?.requestPointerLock !== 'function';
+    this._noLockApi = this.lockFailed; // a browser without pointer lock stays in the fallback for good; a refused request does not (see requestLock)
+    this._lockErrors = 0; this._lastTry = -1e9;
     this.paused = false;
     this._interact = false;
     this._webPress = false;
@@ -42,6 +44,7 @@ class SpiderInput {
     canvas.addEventListener('pointerdown', (e) => {
       if (e.button !== 0 || !this.isActive() || this.paused) return;
       if (!this.locked && !this.lockFailed) { this.requestLock(); return; } // the first click only captures the mouse
+      if (!this.locked && !this._noLockApi && Date.now() - this._lastTry > 3000) this.requestLock(); // in the fallback: try the lock again now and then, it may work now
       this.webHeld = true; this._webPress = true;
     });
     // releases are caught anywhere (the pointer may have left the canvas while the button was held)
@@ -49,8 +52,9 @@ class SpiderInput {
     window.addEventListener('pointerup', up);
     window.addEventListener('pointercancel', () => { this.webHeld = false; });
     canvas.addEventListener('contextmenu', (e) => { if (this.isActive()) e.preventDefault(); });
-    document.addEventListener('pointerlockchange', () => { if (!this.locked) this.webHeld = false; }); // Esc / alt-tab: a held web is let go
-    document.addEventListener('pointerlockerror', () => { this.lockFailed = true; });
+    document.addEventListener('pointerlockchange', () => { if (!this.locked) this.webHeld = false; else { this._lockErrors = 0; this.lockFailed = this._noLockApi; } }); // Esc / alt-tab: a held web is let go; a lock that worked clears the failure
+    // a refused request (the browser wants a moment after Esc, or refused the raw-input option) is not permanent: only three in a row switch to the fallback
+    document.addEventListener('pointerlockerror', () => { if (++this._lockErrors >= 3) this.lockFailed = true; });
     document.addEventListener('mousemove', (e) => {
       if (!this.isActive() || this.paused) return;
       if (this.locked || (e.buttons & 2)) { // locked: any movement looks; unlocked fallback: right-button drag
@@ -61,7 +65,11 @@ class SpiderInput {
 
   get locked() { return !!this.canvas && document.pointerLockElement === this.canvas; }
 
+  /** Forgets earlier refusals: called when Spider-Man becomes the active character, so a bad moment in a previous session of the mode does not cost the mouse look for good. */
+  rearm() { this._lockErrors = 0; this.lockFailed = this._noLockApi; }
+
   requestLock() {
+    this._lastTry = Date.now();
     try {
       const p = this.canvas.requestPointerLock({ unadjustedMovement: true });
       if (p && typeof p.catch === 'function') p.catch(() => { try { this.canvas.requestPointerLock(); } catch { this.lockFailed = true; } });

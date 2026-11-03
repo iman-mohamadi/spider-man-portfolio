@@ -181,6 +181,42 @@ async function initApp() {
     }
   }
 
+  // Portfolio (content/profile.json is the single source of truth): billboards on building walls, map pins and the F-key project panel, in every mode and with ?spider=0 too.
+  // portfolio-content.js validates the file (warnings are logged, bad optional data is dropped), portfolio-sites.js lists the candidate places, portfolio-billboards.js
+  // allocates and builds the boards. A missing or empty profile means no boards, pins or panels; a failure here never stops the city.
+  let portfolioPins = [];
+  try {
+    const fetchJson = (url) => fetch(url).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+    const [{ loadPortfolio, contactCard }, { profileBoards }, { buildSites, SITE_RULES }, { createSpiderWorld, insideCollider }, cityConfig, { createLedScreenMaterial }] = await Promise.all([
+      import('./portfolio-content.js'), import('./portfolio-billboards.js'), import('./portfolio-sites.js'), import('./spider-world.js'), import('./city-config.js'), import('./tsl-materials.js')
+    ]);
+    const { profile } = await loadPortfolio({ base: import.meta.url, fetchJson });
+    if (profile) {
+      await showLoadingStage('Hanging the portfolio billboards...');
+      const sites = buildSites(cityConfig);
+      // where a visitor may stand: on a pedestrian sidewalk, clear of buildings and obstacles, off the landmarks' own map pins
+      const ground = {
+        onSidewalk: (x, z) => controllerManager.isPointOnSidewalk(x, z),
+        blocked: (x, z, r) => controllerManager.nearColliders(x, z, r + 1).some((c) => c.maxY > 0.5 && [[0, 0], [r, 0], [-r, 0], [0, r], [0, -r]].some(([dx, dz]) => insideCollider(c, x + dx, z + dz))),
+        landmarks: cityConfig.NYC_LANDMARKS
+      };
+      // Times Square: the boards go on its screens (the city blocks list their places) in place of the original posters, as LED screens; `?portfolioTs=0` keeps the old city-wide boards
+      const tsSlots = scene.getObjectByName('ManhattanCityBlocks')?.userData.timesSquareSlots;
+      const timesSquare = tsSlots && tsSlots.length && new URLSearchParams(location.search).get('portfolioTs') !== '0'
+        ? { slots: tsSlots, centre: cityConfig.TELEPORT_LOCATIONS.timessq, led: createLedScreenMaterial } : null;
+      const res = await profileBoards({ THREE, scene, world: createSpiderWorld(controllerManager), profile, sites, rules: SITE_RULES, ground, timesSquare });
+      if (res.timesSquare) console.info(`[portfolio] Times Square: ${res.timesSquare.boards} boards and ${res.timesSquare.decor} decor screens replace the original posters`);
+      portfolioPins = res.pins;
+      if (spider && spider.portfolio) { // the F-key panel: the same projects, each at the place of its board, and the Contact card from the profile's links
+        const list = profile.projects.filter((p) => res.spots.has(p.id)).map((p) => ({ project: p, x: res.spots.get(p.id).x, z: res.spots.get(p.id).z }));
+        const card = contactCard(profile), cs = res.spots.get('portfolio-contact');
+        if (card && cs) list.push({ project: card, x: cs.x, z: cs.z });
+        spider.portfolio.setProjects(list);
+      }
+      markInit('billboards');
+    }
+  } catch (e) { console.warn('[portfolio] unavailable', e); }
+
   // Island-wide static geometry: chunk & distance-cull the small props, shadow stand-ins for the big casters
   // (scene-culling.js)
   await showLoadingStage('Preparing scene visibility and shadows...');
@@ -292,7 +328,7 @@ async function initApp() {
     car: [[['W', 'S'], 'Drive / Reverse'], [['A', 'D'], 'Steer'], [['B'], 'Horn'], [['Drag'], 'Orbit']],
     cyclist: [[['W', 'S'], 'Pedal / Brake'], [['A', 'D'], 'Lean & Turn'], [['Drag'], 'Orbit']],
     helicopter: [[['W', 'S'], 'Pitch'], [['A', 'D'], 'Yaw'], [['Space', 'E'], 'Ascend'], [['Q', 'C'], 'Descend']],
-    spider: [[['W', 'A', 'S', 'D'], 'Move / steer'], [['Shift'], 'Sprint'], [['Space'], 'Jump / release web'], [['Mouse'], 'Look'], [['Left click'], 'Web: hold to swing'], [['F'], 'Interact']]
+    spider: [[['W', 'A', 'S', 'D'], 'Move / steer · crawl on walls'], [['Shift'], 'Sprint · run up walls'], [['Space'], 'Jump · again in air · off a wall · release web'], [['Mouse'], 'Look'], [['Left click'], 'Web: hold to swing'], [['F'], 'Interact']]
   };
   // Top speeds in mph (controllers.js caps them at 8.2, 36, 19 & 52 m/s): full scale of the speed meter
   const topSpeedMph = { person: 18, car: 81, cyclist: 43, helicopter: 116, spider: 100 };
@@ -512,6 +548,7 @@ async function initApp() {
     },
     onTeleport: teleportTo
   });
+  mapSystem.setPortfolioPins(portfolioPins);
 
   teleportButtons.forEach((btn) => {
     btn.addEventListener('click', () => {

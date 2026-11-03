@@ -1,0 +1,379 @@
+<!doctype html>
+<meta charset="utf-8"><title>Brand New Day suit - conversion lab</title>
+<!--
+  Dev-only. Converts the downloaded "Spider-Man Brand New Day" FBX (static, unskinned meshes; UDIM textures) into content/spider-bnd/spider-bnd.glb:
+    1. welds the triangle soup, remaps the UDIM UVs into one atlas per material set (textures: see tools/bnd-atlas.ps1),
+    2. decimates (quadric edge collapse that keeps UV seams), keeping the Frame mesh's Squint / Open morph targets (the eye motion),
+    3. skins every mesh to the Mixamo skeleton of content/spider-raimi/spider-raimi.glb (weights by distance to the bone segments, smoothed over the surface),
+       so all the existing Mixamo clips and the procedural rig drive it unchanged,
+    4. exports a GLB through a localhost-only receiver (POST http://127.0.0.1:8150/save?name=spider-bnd.glb).
+  The original FBX / OBJ / zip are only read. Nothing here is loaded by the game.
+  Usage (console):  await lab.load();  lab.build();  lab.show();  await lab.save();
+-->
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/gh/mrdoob/three.js@b3396270682287470d161658ac01084d25e8dba6/build/three.webgpu.js","three/webgpu":"https://cdn.jsdelivr.net/gh/mrdoob/three.js@b3396270682287470d161658ac01084d25e8dba6/build/three.webgpu.js","three/tsl":"https://cdn.jsdelivr.net/gh/mrdoob/three.js@b3396270682287470d161658ac01084d25e8dba6/build/three.tsl.js","three/addons/":"https://cdn.jsdelivr.net/gh/mrdoob/three.js@b3396270682287470d161658ac01084d25e8dba6/examples/jsm/"}}</script>
+<pre id="log" style="font:12px monospace;margin:4px"></pre>
+<script type="module">
+import * as THREE from 'three';
+import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
+
+const logEl = document.getElementById('log');
+const log = (...a) => { const s = a.join(' '); logEl.textContent += s + '\n'; console.log(s); };
+const lab = window.lab = { THREE, cfg: { height: 1.82, ox: 0, oz: 0, tile: 3, dropWeb: true, targets: { Suit: 56000, Shoe: 14000, Webshooter: 12000, Frame: 12000, Lense: 2100 }, armFit: true, smooth: 12, tauN: 0.65 } };
+const FBX_UNITS_TALL = 967.2, FBX_FOOT = -1.6; // measured bounds of the suit meshes
+
+// ------------------------------------------------------------------------------------------------ loading
+lab.load = async () => {
+  const buf = await (await fetch('/spider-man_brand-new-day/Spider-Man+Brand+New+Day.fbx')).arrayBuffer();
+  lab.fbx = new FBXLoader().parse(buf, '');
+  lab.fbx.updateMatrixWorld(true);
+  lab.raimi = await new GLTFLoader().loadAsync('/content/spider-raimi/spider-raimi.glb');
+  lab.raimi.scene.updateMatrixWorld(true);
+  let ref = null; lab.raimi.scene.traverse((o) => { if (o.isSkinnedMesh && !ref) ref = o; });
+  lab.ref = ref; lab.bones = ref.skeleton.bones;
+  lab.boneByName = new Map(lab.bones.map((b, i) => [b.name.replace(/^mixamorig:?/, ''), i]));
+  log('loaded: fbx meshes', lab.fbx.children.map((c) => c.name).join(','), '| raimi joints', lab.bones.length);
+};
+
+// ------------------------------------------------------------------------------------------------ geometry preparation
+const SUIT_TILE = (t) => [t % 3, t < 3 ? 0 : 1];   // the suit atlas: tiles 1001..1005 in a 3 x 2 grid (column, row from the top)
+const ACC_TILE = (u, v) => [u, v];                  // the accessory atlas: 1001, 1002, 1003 / 1011, 1012
+
+/** Triangle soup of one FBX mesh -> welded indexed mesh in world metres (Y up, feet on y = 0) with atlas UVs (glTF convention). */
+function prepare(node, kind) {
+  const g = node.geometry, P = g.attributes.position, N = g.attributes.normal, UV = g.attributes.uv;
+  const S = lab.cfg.height / FBX_UNITS_TALL;
+  const M = new THREE.Matrix4().makeTranslation(lab.cfg.ox, -FBX_FOOT * S, lab.cfg.oz).multiply(new THREE.Matrix4().makeScale(S, S, S)).multiply(node.matrixWorld);
+  const nm = new THREE.Matrix3().getNormalMatrix(M), lin = new THREE.Matrix3().setFromMatrix4(M);
+  const morphs = (g.morphAttributes && g.morphAttributes.position) || [];
+  const names = node.morphTargetDictionary ? Object.keys(node.morphTargetDictionary).sort((a, b) => node.morphTargetDictionary[a] - node.morphTargetDictionary[b]) : [];
+  const tris = P.count / 3, map = new Map();
+  const pos = [], nrm = [], uvs = [], mp = morphs.map(() => []), idx = new Uint32Array(P.count);
+  const v = new THREE.Vector3(), n = new THREE.Vector3(), w = new THREE.Vector3(), q = (x, s) => Math.round(x * s);
+  const tile = kind === 'suit' ? 0 : 1;
+  for (let t = 0; t < tris; t++) {
+    let cu = 0, cv = 0; for (let k = 0; k < 3; k++) { cu += UV.getX(t * 3 + k); cv += UV.getY(t * 3 + k); }
+    const tu = Math.floor(cu / 3), tv = Math.floor(cv / 3);
+    const [cx, cy] = kind === 'suit' ? SUIT_TILE(tu) : ACC_TILE(tu, tv);
+    for (let k = 0; k < 3; k++) {
+      const i = t * 3 + k;
+      v.fromBufferAttribute(P, i).applyMatrix4(M); n.fromBufferAttribute(N, i).applyMatrix3(nm).normalize();
+      const fu = Math.min(1, Math.max(0, UV.getX(i) - tu)), fv = Math.min(1, Math.max(0, UV.getY(i) - tv));
+      const u = (cx + fu) / 3, vv = (cy + (1 - fv)) / 2;
+      let key = `${q(v.x, 2e4)},${q(v.y, 2e4)},${q(v.z, 2e4)}|${q(u, 2e3)},${q(vv, 2e3)}`; // same place, same texel; normals within ~30 degrees are merged (a hard edge keeps both)
+      const mv = morphs.map((mo) => { w.fromBufferAttribute(mo, i); if (g.morphTargetsRelative) w.applyMatrix3(lin); else { w.applyMatrix4(M); w.sub(v); } return w.clone(); }); // the shape as a delta from the base
+      if (mv.length) key += '|' + mv.map((m) => `${q(m.x, 2e4)},${q(m.y, 2e4)},${q(m.z, 2e4)}`).join('|');
+      let list = map.get(key); if (!list) map.set(key, list = []);
+      let id = -1;
+      for (const e of list) if (nrm[e * 3] * n.x + nrm[e * 3 + 1] * n.y + nrm[e * 3 + 2] * n.z > 0.87) { id = e; break; }
+      if (id < 0) {
+        id = pos.length / 3; list.push(id);
+        pos.push(v.x, v.y, v.z); nrm.push(n.x, n.y, n.z); uvs.push(u, vv);
+        mv.forEach((m, j) => mp[j].push(m.x, m.y, m.z));
+      }
+      idx[i] = id;
+    }
+  }
+  return { name: node.name, kind, pos: new Float32Array(pos), nrm: new Float32Array(nrm), uv: new Float32Array(uvs), idx, morph: mp.map((a) => new Float32Array(a)), morphNames: names };
+}
+
+// ------------------------------------------------------------------------------------------------ decimation (quadric edge collapse, seams frozen)
+function decimate(m, target) {
+  const n = m.pos.length / 3, F0 = m.idx.length / 3;
+  if (F0 <= target) return m;
+  const pos = m.pos, faces = Uint32Array.from(m.idx), alive = new Uint8Array(F0).fill(1);
+  const vf = Array.from({ length: n }, () => []);
+  for (let f = 0; f < F0; f++) for (let k = 0; k < 3; k++) vf[faces[f * 3 + k]].push(f);
+  // frozen: any vertex on a seam (another vertex at the same place) or on an open boundary
+  const grp = new Map(), gid = new Int32Array(n), gcount = [];
+  for (let i = 0; i < n; i++) { const key = `${Math.round(pos[i * 3] * 1e5)},${Math.round(pos[i * 3 + 1] * 1e5)},${Math.round(pos[i * 3 + 2] * 1e5)}`; let g = grp.get(key); if (g === undefined) { g = gcount.length; grp.set(key, g); gcount.push(0); } gid[i] = g; gcount[g]++; }
+  const frozen = new Uint8Array(n);
+  for (let i = 0; i < n; i++) if (gcount[gid[i]] > 1) frozen[i] = 1;
+  const ec = new Map();
+  for (let f = 0; f < F0; f++) for (let k = 0; k < 3; k++) { const a = faces[f * 3 + k], b = faces[f * 3 + (k + 1) % 3], key = a < b ? a * n + b : b * n + a; ec.set(key, (ec.get(key) || 0) + 1); }
+  for (const [key, c] of ec) if (c === 1) { frozen[Math.floor(key / n)] = 1; frozen[key % n] = 1; }
+  // quadrics
+  const Q = new Float64Array(10 * n);
+  const addPlane = (v, a, b, c, d, wt) => { const o = v * 10; Q[o] += wt * a * a; Q[o + 1] += wt * a * b; Q[o + 2] += wt * a * c; Q[o + 3] += wt * a * d; Q[o + 4] += wt * b * b; Q[o + 5] += wt * b * c; Q[o + 6] += wt * b * d; Q[o + 7] += wt * c * c; Q[o + 8] += wt * c * d; Q[o + 9] += wt * d * d; };
+  const faceN = (f, out) => { const i0 = faces[f * 3] * 3, i1 = faces[f * 3 + 1] * 3, i2 = faces[f * 3 + 2] * 3; const ax = pos[i1] - pos[i0], ay = pos[i1 + 1] - pos[i0 + 1], az = pos[i1 + 2] - pos[i0 + 2], bx = pos[i2] - pos[i0], by = pos[i2 + 1] - pos[i0 + 1], bz = pos[i2 + 2] - pos[i0 + 2]; out[0] = ay * bz - az * by; out[1] = az * bx - ax * bz; out[2] = ax * by - ay * bx; return Math.hypot(out[0], out[1], out[2]); };
+  const tn = [0, 0, 0];
+  for (let f = 0; f < F0; f++) {
+    const area2 = faceN(f, tn); if (area2 < 1e-14) continue;
+    const a = tn[0] / area2, b = tn[1] / area2, c = tn[2] / area2, i0 = faces[f * 3] * 3, d = -(a * pos[i0] + b * pos[i0 + 1] + c * pos[i0 + 2]);
+    for (let k = 0; k < 3; k++) addPlane(faces[f * 3 + k], a, b, c, d, area2 * 0.5);
+  }
+  const err = (v, x, y, z) => { const o = v * 10; return Q[o] * x * x + 2 * Q[o + 1] * x * y + 2 * Q[o + 2] * x * z + 2 * Q[o + 3] * x + Q[o + 4] * y * y + 2 * Q[o + 5] * y * z + 2 * Q[o + 6] * y + Q[o + 7] * z * z + 2 * Q[o + 8] * z + Q[o + 9]; };
+  const cost = (a, b) => { // collapse a into b (a disappears): error of b's place for the summed quadric
+    const o1 = a * 10, o2 = b * 10; const s = (i) => Q[o1 + i] + Q[o2 + i], x = pos[b * 3], y = pos[b * 3 + 1], z = pos[b * 3 + 2];
+    return s(0) * x * x + 2 * s(1) * x * y + 2 * s(2) * x * z + 2 * s(3) * x + s(4) * y * y + 2 * s(5) * y * z + 2 * s(6) * y + s(7) * z * z + 2 * s(8) * z + s(9);
+  };
+  // binary heap of [cost, a, b, verA, verB]
+  const heap = []; const ver = new Uint32Array(n);
+  const push = (e) => { let i = heap.length; heap.push(e); while (i > 0) { const p = (i - 1) >> 1; if (heap[p][0] <= e[0]) break; heap[i] = heap[p]; i = p; } heap[i] = e; };
+  const pop = () => { const top = heap[0], last = heap.pop(); if (heap.length) { let i = 0; const len = heap.length; for (;;) { let c = 2 * i + 1; if (c >= len) break; if (c + 1 < len && heap[c + 1][0] < heap[c][0]) c++; if (heap[c][0] >= last[0]) break; heap[i] = heap[c]; i = c; } heap[i] = last; } return top; };
+  const pushEdge = (a, b) => { if (!frozen[a]) push([cost(a, b), a, b, ver[a], ver[b]]); if (!frozen[b]) push([cost(b, a), b, a, ver[b], ver[a]]); };
+  for (const key of ec.keys()) pushEdge(Math.floor(key / n), key % n);
+  let alive3 = F0; const tmpA = [0, 0, 0], tmpB = [0, 0, 0];
+  while (alive3 > target && heap.length) {
+    const [c, a, b, va, vb] = pop();
+    if (ver[a] !== va || ver[b] !== vb || !vf[a].length || !vf[b].length) continue;
+    // a must be connected to b
+    let ok = true, shared = 0;
+    for (const f of vf[a]) {
+      if (!alive[f]) continue;
+      const has = faces[f * 3] === b || faces[f * 3 + 1] === b || faces[f * 3 + 2] === b;
+      if (has) { shared++; continue; }
+      // flip test: replace a by b in f
+      const i0 = faces[f * 3], i1 = faces[f * 3 + 1], i2 = faces[f * 3 + 2];
+      const area0 = faceN(f, tmpA);
+      const sv = faces.slice(f * 3, f * 3 + 3); const k = sv.indexOf(a); faces[f * 3 + k] = b;
+      const area1 = faceN(f, tmpB); faces[f * 3 + k] = a;
+      if (area0 < 1e-14 || area1 < 1e-14 || (tmpA[0] * tmpB[0] + tmpA[1] * tmpB[1] + tmpA[2] * tmpB[2]) / (area0 * area1) < 0.35) { ok = false; break; }
+    }
+    if (!ok || shared < 1) continue;
+    // collapse
+    for (let o = 0; o < 10; o++) Q[b * 10 + o] += Q[a * 10 + o];
+    const keep = [];
+    for (const f of vf[a]) {
+      if (!alive[f]) continue;
+      if (faces[f * 3] === b || faces[f * 3 + 1] === b || faces[f * 3 + 2] === b) { alive[f] = 0; alive3--; for (let k = 0; k < 3; k++) { const vv = faces[f * 3 + k]; if (vv !== a && vv !== b) { const l = vf[vv]; const i = l.indexOf(f); if (i >= 0) l.splice(i, 1); } } const lb = vf[b]; const ib = lb.indexOf(f); if (ib >= 0) lb.splice(ib, 1); }
+      else { for (let k = 0; k < 3; k++) if (faces[f * 3 + k] === a) faces[f * 3 + k] = b; keep.push(f); }
+    }
+    for (const f of keep) vf[b].push(f);
+    vf[a] = []; ver[a]++; ver[b]++;
+    const seen = new Set();
+    for (const f of vf[b]) for (let k = 0; k < 3; k++) { const o = faces[f * 3 + k]; if (o !== b && !seen.has(o)) { seen.add(o); pushEdge(b, o); } }
+  }
+  // compact
+  const remap = new Int32Array(n).fill(-1); let nv = 0; const outIdx = [];
+  for (let f = 0; f < F0; f++) if (alive[f]) for (let k = 0; k < 3; k++) { const v = faces[f * 3 + k]; if (remap[v] < 0) remap[v] = nv++; outIdx.push(remap[v]); }
+  const take = (src, size) => { const out = new Float32Array(nv * size); for (let i = 0; i < n; i++) if (remap[i] >= 0) for (let k = 0; k < size; k++) out[remap[i] * size + k] = src[i * size + k]; return out; };
+  return { ...m, pos: take(m.pos, 3), nrm: take(m.nrm, 3), uv: take(m.uv, 2), idx: Uint32Array.from(outIdx), morph: m.morph.map((a) => take(a, 3)) };
+}
+
+// ------------------------------------------------------------------------------------------------ skeleton fit and weights
+const SEGMENTS = (side) => { const L = side; return [[L + 'Shoulder', L + 'Arm'], [L + 'Arm', L + 'ForeArm'], [L + 'ForeArm', L + 'Hand'], [L + 'Hand', L + 'HandMiddle4'], [L + 'UpLeg', L + 'Leg'], [L + 'Leg', L + 'Foot'], [L + 'Foot', L + 'ToeBase'], [L + 'ToeBase', L + 'Toe_End']]; };
+const CENTRE_SEGMENTS = [['Hips', 'Spine'], ['Spine', 'Spine1'], ['Spine1', 'Spine2'], ['Spine2', 'Neck'], ['Neck', 'Head'], ['Head', null]];
+
+/** The fit pose: the Raimi bind pose with each arm turned about its shoulder to lie along the BND arm. Returns the world matrices F[i] of every joint. */
+function fitSkeleton(suit) {
+  const bones = lab.bones, W = bones.map((b) => b.matrixWorld.clone()), F = W.map((m) => m.clone());
+  const info = {};
+  if (lab.cfg.armFit) for (const side of ['Left', 'Right']) {
+    const sign = side === 'Left' ? 1 : -1, pts = [];
+    for (let i = 0; i < suit.pos.length; i += 3) { const x = suit.pos[i] * sign, y = suit.pos[i + 1]; if (x > 0.27 && y > 0.7 && y < 1.5) pts.push([x, y]); }
+    let mx = 0, my = 0; for (const p of pts) { mx += p[0]; my += p[1]; } mx /= pts.length; my /= pts.length;
+    let sxx = 0, sxy = 0, syy = 0; for (const p of pts) { const dx = p[0] - mx, dy = p[1] - my; sxx += dx * dx; sxy += dx * dy; syy += dy * dy; }
+    const th = 0.5 * Math.atan2(2 * sxy, sxx - syy); let dx = Math.cos(th), dy = Math.sin(th); if (dx < 0) { dx = -dx; dy = -dy; } // along the arm, away from the body
+    const arm = bones[lab.boneByName.get(side + 'Arm')], hand = bones[lab.boneByName.get(side + 'Hand')];
+    const p0 = arm.getWorldPosition(new THREE.Vector3()), p1 = hand.getWorldPosition(new THREE.Vector3());
+    const skelAng = Math.atan2((p1.y - p0.y), (p1.x - p0.x) * sign), bndAng = Math.atan2(dy, dx);
+    const phi = (bndAng - skelAng) * sign; // rotation about +Z (the arm is mirrored on the right)
+    info[side] = { n: pts.length, bndDeg: +(bndAng * 57.3).toFixed(1), skelDeg: +(skelAng * 57.3).toFixed(1), phiDeg: +(phi * 57.3).toFixed(1) };
+    const R = new THREE.Matrix4().makeTranslation(p0.x, p0.y, p0.z).multiply(new THREE.Matrix4().makeRotationZ(phi)).multiply(new THREE.Matrix4().makeTranslation(-p0.x, -p0.y, -p0.z));
+    const rootIx = lab.boneByName.get(side + 'Arm');
+    bones.forEach((b, i) => { for (let p = b; p; p = p.parent) if (p === bones[rootIx]) { F[i] = R.clone().multiply(W[i]); break; } });
+  }
+  lab.fitInfo = info;
+  return { W, F };
+}
+
+function segmentList(F) {
+  const bones = lab.bones, pos = (i) => new THREE.Vector3().setFromMatrixPosition(F[i]);
+  const segs = [];
+  const add = (a, b) => {
+    const ia = lab.boneByName.get(a); if (ia === undefined) return;
+    const A = pos(ia); let B;
+    if (b) { const ib = lab.boneByName.get(b); if (ib === undefined) return; B = pos(ib); } else B = A.clone().add(new THREE.Vector3(0, 0.22, 0)); // head: up to the crown
+    segs.push({ bone: ia, A, B, name: a });
+  };
+  for (const [a, b] of CENTRE_SEGMENTS) add(a, b);
+  for (const side of ['Left', 'Right']) for (const [a, b] of SEGMENTS(side)) add(a, b);
+  return segs;
+}
+
+function distToSeg(p, A, B) {
+  const abx = B.x - A.x, aby = B.y - A.y, abz = B.z - A.z, apx = p[0] - A.x, apy = p[1] - A.y, apz = p[2] - A.z;
+  const t = Math.max(0, Math.min(1, (apx * abx + apy * aby + apz * abz) / (abx * abx + aby * aby + abz * abz || 1)));
+  const dx = apx - t * abx, dy = apy - t * aby, dz = apz - t * abz; return Math.hypot(dx, dy, dz);
+}
+
+/** Weights of every vertex of `m` for the segments: linear fall-off in the distance beyond the nearest, then smoothing over the mesh. Returns dense (n x nseg). */
+function skinWeights(m, segs) {
+  const n = m.pos.length / 3, K = segs.length, W = new Float32Array(n * K), p = [0, 0, 0];
+  const d = new Float32Array(K), D = new Float32Array(n * K), r = new Float32Array(K).fill(1);
+  for (let i = 0; i < n; i++) { p[0] = m.pos[i * 3]; p[1] = m.pos[i * 3 + 1]; p[2] = m.pos[i * 3 + 2]; for (let k = 0; k < K; k++) D[i * K + k] = distToSeg(p, segs[k].A, segs[k].B); }
+  // distances are measured in "radii" of the limb they belong to: the torso side panel next to an upper arm is further from the arm (in arm radii) than from the spine (in torso
+  // radii). The radius of a segment is the median distance of the vertices that are nearest to it, estimated twice.
+  for (let pass = 0; pass < 3; pass++) {
+    const lists = Array.from({ length: K }, () => []);
+    for (let i = 0; i < n; i++) { let best = 0, bd = 1e9; for (let k = 0; k < K; k++) { const dn = D[i * K + k] / r[k]; if (dn < bd) { bd = dn; best = k; } } lists[best].push(D[i * K + best]); }
+    for (let k = 0; k < K; k++) { const l = lists[k].sort((a, b) => a - b); r[k] = l.length > 30 ? Math.max(0.02, l[l.length >> 1]) : 0.06; }
+  }
+  lab.radii = Array.from(r).map((v) => +v.toFixed(3));
+  const tauN = lab.cfg.tauN;
+  for (let i = 0; i < n; i++) {
+    for (let k = 0; k < K; k++) d[k] = D[i * K + k] / r[k];
+    let dm = 1e9; for (let k = 0; k < K; k++) if (d[k] < dm) dm = d[k];
+    let s = 0; for (let k = 0; k < K; k++) { const w = Math.max(0, 1 - (d[k] - dm) / tauN); W[i * K + k] = w * w; s += w * w; }
+    for (let k = 0; k < K; k++) W[i * K + k] /= s;
+  }
+  // smoothing over the surface: vertices at the same place share their weights
+  const grp = new Map(), gid = new Int32Array(n); let ng = 0;
+  for (let i = 0; i < n; i++) { const key = `${Math.round(m.pos[i * 3] * 1e5)},${Math.round(m.pos[i * 3 + 1] * 1e5)},${Math.round(m.pos[i * 3 + 2] * 1e5)}`; let g = grp.get(key); if (g === undefined) { g = ng++; grp.set(key, g); } gid[i] = g; }
+  const nb = Array.from({ length: ng }, () => new Set());
+  for (let f = 0; f < m.idx.length; f += 3) for (let k = 0; k < 3; k++) { const a = gid[m.idx[f + k]], b = gid[m.idx[f + (k + 1) % 3]]; if (a !== b) { nb[a].add(b); nb[b].add(a); } }
+  let G = new Float32Array(ng * K); const cnt = new Float32Array(ng);
+  for (let i = 0; i < n; i++) { cnt[gid[i]]++; for (let k = 0; k < K; k++) G[gid[i] * K + k] += W[i * K + k]; }
+  for (let g = 0; g < ng; g++) for (let k = 0; k < K; k++) G[g * K + k] /= cnt[g];
+  const nbArr = nb.map((s) => Array.from(s));
+  for (let it = 0; it < lab.cfg.smooth; it++) {
+    const H = new Float32Array(ng * K);
+    for (let g = 0; g < ng; g++) {
+      const ns = nbArr[g]; if (!ns.length) { for (let k = 0; k < K; k++) H[g * K + k] = G[g * K + k]; continue; }
+      for (let k = 0; k < K; k++) { let a = 0; for (const o of ns) a += G[o * K + k]; H[g * K + k] = 0.5 * G[g * K + k] + 0.5 * a / ns.length; }
+    }
+    G = H;
+  }
+  for (let i = 0; i < n; i++) for (let k = 0; k < K; k++) W[i * K + k] = G[gid[i] * K + k];
+  return W;
+}
+
+/** Top four influences as (joint index, weight) attributes. */
+function pack4(W, n, K, segs) {
+  const idx = new Uint16Array(n * 4), wt = new Float32Array(n * 4);
+  for (let i = 0; i < n; i++) {
+    const order = Array.from({ length: K }, (_, k) => k).sort((a, b) => W[i * K + b] - W[i * K + a]).slice(0, 4);
+    let s = 0; for (const k of order) s += W[i * K + k];
+    order.forEach((k, j) => { idx[i * 4 + j] = segs[k].bone; wt[i * 4 + j] = s > 0 ? W[i * K + k] / s : (j === 0 ? 1 : 0); });
+  }
+  return { idx, wt };
+}
+
+// ------------------------------------------------------------------------------------------------ build
+lab.build = () => {
+  const t0 = performance.now(), cfg = lab.cfg, nodes = Object.fromEntries(lab.fbx.children.map((c) => [c.name, c]));
+  lab.parts = {};
+  const kinds = { Suit: 'suit', Shoe: 'acc', Webshooter: 'acc', Frame: 'acc', Lense: 'acc', Web: 'acc' };
+  for (const name of Object.keys(kinds)) {
+    if (name === 'Web' && cfg.dropWeb) continue;
+    const m0 = prepare(nodes[name], kinds[name]);
+    const t1 = performance.now();
+    const m = decimate(m0, cfg.targets[name] || 1e9);
+    lab.parts[name] = m;
+    log(name.padEnd(11), 'welded', m0.idx.length / 3, 'tris /', m0.pos.length / 3, 'verts ->', m.idx.length / 3, 'tris /', m.pos.length / 3, 'verts', Math.round(performance.now() - t1), 'ms');
+  }
+  // skeleton fit and weights
+  const suit = lab.parts.Suit, { W, F } = fitSkeleton(suit);
+  lab.W = W; lab.F = F; log('arm fit', JSON.stringify(lab.fitInfo));
+  const segs = segmentList(F); lab.segs = segs;
+  const K = segs.length, n = suit.pos.length / 3;
+  const dense = skinWeights(suit, segs); lab.suitDense = dense;
+  suit.skin = pack4(dense, n, K, segs);
+  // other meshes: the nearest suit vertex (Frame and Lense: the head)
+  const grid = new Map(), cell = 0.03, ck = (x, y, z) => `${Math.floor(x / cell)},${Math.floor(y / cell)},${Math.floor(z / cell)}`;
+  for (let i = 0; i < n; i++) { const k = ck(suit.pos[i * 3], suit.pos[i * 3 + 1], suit.pos[i * 3 + 2]); (grid.get(k) || grid.set(k, []).get(k)).push(i); }
+  const nearest = (x, y, z) => {
+    for (let r = 0; r < 6; r++) {
+      let best = -1, bd = 1e9; const cx = Math.floor(x / cell), cy = Math.floor(y / cell), cz = Math.floor(z / cell);
+      for (let a = -r; a <= r; a++) for (let b = -r; b <= r; b++) for (let c = -r; c <= r; c++) { const l = grid.get(`${cx + a},${cy + b},${cz + c}`); if (!l) continue; for (const i of l) { const d = (suit.pos[i * 3] - x) ** 2 + (suit.pos[i * 3 + 1] - y) ** 2 + (suit.pos[i * 3 + 2] - z) ** 2; if (d < bd) { bd = d; best = i; } } }
+      if (best >= 0) return best;
+    }
+    return 0;
+  };
+  const headBone = lab.boneByName.get('Head');
+  for (const name of Object.keys(lab.parts)) {
+    if (name === 'Suit') continue;
+    const m = lab.parts[name], c = m.pos.length / 3, idx = new Uint16Array(c * 4), wt = new Float32Array(c * 4);
+    for (let i = 0; i < c; i++) {
+      if (name === 'Frame' || name === 'Lense') { idx[i * 4] = headBone; wt[i * 4] = 1; continue; }
+      const s = nearest(m.pos[i * 3], m.pos[i * 3 + 1], m.pos[i * 3 + 2]); for (let k = 0; k < 4; k++) { idx[i * 4 + k] = suit.skin.idx[s * 4 + k]; wt[i * 4 + k] = suit.skin.wt[s * 4 + k]; }
+    }
+    m.skin = { idx, wt };
+  }
+  log('build done', Math.round(performance.now() - t0), 'ms; total tris', Object.values(lab.parts).reduce((a, m) => a + m.idx.length / 3, 0));
+};
+
+// ------------------------------------------------------------------------------------------------ scene objects
+async function texture(url, srgb, mime) {
+  const t = await new THREE.TextureLoader().loadAsync(url);
+  t.flipY = false; t.colorSpace = srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace; t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping; t.userData.mimeType = mime; t.anisotropy = 8;
+  return t;
+}
+lab.makeMaterials = async () => {
+  const B = '/content/spider-bnd/tex/';
+  const suitMR = await texture(B + 'suit_mr.jpg', false, 'image/jpeg'), accMR = await texture(B + 'acc_mr.jpg', false, 'image/jpeg');
+  const suitBase = await texture(B + 'suit_base.jpg', true, 'image/jpeg'), suitN = await texture(B + 'suit_normal.jpg', false, 'image/jpeg');
+  const accBase = await texture(B + 'acc_base.png', true, 'image/png'), accN = await texture(B + 'acc_normal.jpg', false, 'image/jpeg');
+  const std = (name, map, normalMap, mr) => new THREE.MeshStandardMaterial({ name, map, normalMap, metalnessMap: mr, roughnessMap: mr, metalness: 1, roughness: 1 });
+  lab.mats = { Suit: std('BndSuit', suitBase, suitN, suitMR), Shoe: std('BndShoe', accBase, accN, accMR), Webshooter: std('BndWebshooter', accBase, accN, accMR), Frame: std('BndEyeFrame', accBase, accN, accMR), Lense: std('BndEyeLens', accBase, accN, accMR), Web: std('BndWeb', accBase, accN, accMR) };
+  lab.mats.Suit.metalness = 0.05; // the suit's metallic map is ~0.9 everywhere (a baked-for-another-renderer value): as a metal the cloth is a white sheen under the sun
+  lab.mats.Lense.transparent = true; lab.mats.Lense.depthWrite = false;
+  for (const k of Object.keys(lab.mats)) lab.mats[k].side = THREE.FrontSide;
+};
+
+/** Builds the skinned meshes onto the (cloned) Raimi skeleton. `inScene` keeps them for showing; export uses the same objects. */
+lab.assemble = async () => {
+  if (!lab.mats) await lab.makeMaterials();
+  const scene = lab.raimi.scene;
+  // drop the Raimi meshes, keep the skeleton
+  const old = []; scene.traverse((o) => { if (o.isSkinnedMesh) old.push(o); }); old.forEach((o) => o.parent.remove(o));
+  const skeletonParent = lab.bones[0].parent.parent || scene; // SpiderRaimi
+  const bi = lab.F.map((m) => m.clone().invert());
+  const skeleton = new THREE.Skeleton(lab.bones, bi);
+  lab.skinned = {};
+  const host = new THREE.Group(); host.name = 'bnd'; skeletonParent.add(host);
+  for (const [name, m] of Object.entries(lab.parts)) {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(m.pos, 3)); g.setAttribute('normal', new THREE.BufferAttribute(m.nrm, 3)); g.setAttribute('uv', new THREE.BufferAttribute(m.uv, 2));
+    g.setAttribute('skinIndex', new THREE.BufferAttribute(m.skin.idx, 4)); g.setAttribute('skinWeight', new THREE.BufferAttribute(m.skin.wt, 4));
+    g.setIndex(new THREE.BufferAttribute(m.idx, 1));
+    if (m.morph.length) { g.morphAttributes.position = m.morph.map((a) => new THREE.BufferAttribute(a, 3)); g.morphTargetsRelative = true; }
+    const mesh = new THREE.SkinnedMesh(g, lab.mats[name]);
+    mesh.name = 'Bnd' + name; mesh.frustumCulled = false;
+    if (m.morph.length) { mesh.morphTargetDictionary = Object.fromEntries(m.morphNames.map((nme, i) => [nme, i])); mesh.morphTargetInfluences = m.morph.map(() => 0); g.userData.targetNames = m.morphNames; }
+    host.add(mesh); mesh.bind(skeleton, new THREE.Matrix4());
+    lab.skinned[name] = mesh;
+  }
+  lab.skeleton = skeleton; scene.updateMatrixWorld(true);
+  log('assembled', Object.keys(lab.skinned).join(','));
+};
+
+// ------------------------------------------------------------------------------------------------ viewing
+lab.show = async (opt = {}) => {
+  if (!lab.skinned) await lab.assemble();
+  if (!lab.view) {
+    const { WebGPURenderer } = await import('three/webgpu');
+    const r = new WebGPURenderer({ antialias: true }); r.setSize(900, 720); await r.init(); document.body.appendChild(r.domElement);
+    const sc = new THREE.Scene(); sc.background = new THREE.Color(0x303840);
+    sc.add(new THREE.HemisphereLight(0xffffff, 0x444455, 2.0)); const dl = new THREE.DirectionalLight(0xffffff, 2.2); dl.position.set(2, 4, 5); sc.add(dl);
+    sc.add(lab.raimi.scene);
+    lab.view = { r, sc, cam: new THREE.PerspectiveCamera(30, 900 / 720, 0.05, 50) };
+  }
+  const { r, sc, cam } = lab.view, { ang = 0, y = 0.95, d = 4.4, ty = y, fov = 30 } = opt;
+  cam.fov = fov; cam.updateProjectionMatrix(); cam.position.set(Math.sin(ang) * d, y, Math.cos(ang) * d); cam.lookAt(0, ty, 0);
+  r.render(sc, cam);
+};
+
+/** Turns a joint about a WORLD axis (for judging the weights): lab.turn('LeftArm', [0, 0, 1], 100) rotates it 100 degrees. lab.resetPose() undoes all. */
+lab.turn = (name, axis, deg) => {
+  const b = lab.bones[lab.boneByName.get(name)]; b.updateWorldMatrix(true, false);
+  const pq = b.parent.getWorldQuaternion(new THREE.Quaternion()), wq = b.getWorldQuaternion(new THREE.Quaternion());
+  const R = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(...axis).normalize(), deg * Math.PI / 180);
+  b.quaternion.copy(pq.invert().multiply(R).multiply(wq)); b.updateMatrixWorld(true);
+};
+lab.rest = lab.rest || null;
+lab.snapshotRest = () => { lab.rest = lab.bones.map((b) => b.quaternion.clone()); };
+lab.resetPose = () => { if (lab.rest) lab.bones.forEach((b, i) => b.quaternion.copy(lab.rest[i])); lab.raimi.scene.updateMatrixWorld(true); };
+
+// ------------------------------------------------------------------------------------------------ export
+lab.save = async (name = 'spider-bnd.glb') => {
+  if (!lab.skinned) await lab.assemble();
+  const scene = lab.raimi.scene;
+  const out = await new Promise((res, rej) => new GLTFExporter().parse(scene, res, rej, { binary: true, onlyVisible: false, includeCustomExtensions: false }));
+  const r = await fetch('http://127.0.0.1:8150/save?name=' + encodeURIComponent(name), { method: 'POST', body: out });
+  log('saved', name, await r.text());
+};
+log('bnd-lab ready: await lab.load(); lab.build(); await lab.show(); await lab.save()');
+</script>

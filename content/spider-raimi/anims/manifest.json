@@ -15,6 +15,32 @@
     "airSegments": 0
    }
   },
+  "idleLookA": {
+   "file": "idleLookA.json",
+   "meta": {
+    "duration": 3.2667,
+    "rootSpeed": 0,
+    "footSpeed": 0.198,
+    "contact": 0,
+    "firstContact": 0,
+    "airStart": null,
+    "airEnd": null,
+    "airSegments": 0
+   }
+  },
+  "idleLookB": {
+   "file": "idleLookB.json",
+   "meta": {
+    "duration": 4,
+    "rootSpeed": 0,
+    "footSpeed": 0,
+    "contact": 0,
+    "firstContact": 0,
+    "airStart": null,
+    "airEnd": null,
+    "airSegments": 0
+   }
+  },
   "walk": {
    "file": "walk.json",
    "meta": {
