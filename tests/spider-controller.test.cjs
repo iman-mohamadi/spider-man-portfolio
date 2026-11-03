@@ -6,7 +6,9 @@ const { loadModule } = require('./helpers/module.cjs');
 
 const read = (p) => readFileSync(join(__dirname, '..', p), 'utf8');
 const physics = loadModule(read('js/spider-physics.js'));
-const C = loadModule(read('js/spider-controller.js'), { imports: { './spider-physics.js': physics } });
+const wallrun = loadModule(read('js/spider-wallrun.js'));
+const cling = loadModule(read('js/spider-cling.js'), { imports: { './spider-wallrun.js': wallrun } });
+const C = loadModule(read('js/spider-controller.js'), { imports: { './spider-physics.js': physics, './spider-wallrun.js': wallrun, './spider-cling.js': cling } });
 
 // A flat world with a Spider-Man controller on it. `target` is what the (stub) targeting system currently offers.
 function setup({ target = null, y = 0 } = {}) {
@@ -18,7 +20,7 @@ function setup({ target = null, y = 0 } = {}) {
   const state = { target };
   const ctrl = new C.SpiderController({
     controllers: { keys, resolveHorizontalCollision() {} },
-    world: { floorAt: () => 0 },
+    world: { floorAt: () => 0, rayFirstHit: () => null }, // the real world also has the ray cast (wall probes)
     entity, input, getViewYaw: () => 0, rig: null
   });
   ctrl.targeting = { current: () => state.target, flash: (k) => flashes.push(k) };

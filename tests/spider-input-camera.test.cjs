@@ -87,12 +87,16 @@ test('mouse look: right turns right (yaw decreases), down looks down (pitch grow
   assert.equal(again.yaw, 0); assert.equal(again.pitch, 0);
 });
 
-test('a pointer-lock error falls back to unlocked clicks instead of leaving the web unusable', () => {
+test('one refused pointer lock is not permanent; three in a row fall back to unlocked clicks; rearm() and a working lock clear it', () => {
   const h = inputHarness();
   h.fire('document', 'pointerlockerror', {});
+  assert.equal(h.input.lockFailed, false, 'a single refusal (e.g. right after Esc) must not cost the mouse look for good');
+  h.fire('document', 'pointerlockerror', {}); h.fire('document', 'pointerlockerror', {});
   assert.equal(h.input.lockFailed, true);
   h.fire('canvas', 'pointerdown', { button: 0 });
-  assert.equal(h.input.consumeWebPress(), true);
+  assert.equal(h.input.consumeWebPress(), true, 'in the fallback a click still shoots the web');
+  h.input.rearm();
+  assert.equal(h.input.lockFailed, false, 'becoming Spider-Man again forgets earlier refusals');
 });
 
 // ------------------------------------------------------------------ camera

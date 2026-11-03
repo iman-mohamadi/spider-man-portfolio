@@ -462,6 +462,9 @@ function buildCityBlocks(scene, landmarkColliders = []) {
     }
   }
 
+  // The places of Times Square's screens, for the portfolio (portfolio-billboards.js takes them over with the owner's boards; the posters below stay when it does not).
+  group.userData.timesSquareSlots = broadwayBillboards;
+
   // ============================================================================
   // STATIC BILLBOARDS
   // ============================================================================

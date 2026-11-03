@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "note": "Placeholder content for the first interaction point. Replace the text, tags and links with your own project; nothing here is real.",
+  "note": "DEPRECATED. Placeholder content, not used. The portfolio now lives in content/profile.json (\"projects\"). If profile.json has no projects and this file has real (non-placeholder) points they are used with a warning; otherwise it is ignored.",
   "points": [
     {
       "id": "project-1",
@@ -9,12 +9,28 @@
       "description": "Describe the project in two or three sentences: the problem it solves, what you built, and what you are proudest of. This panel opens when Spider-Man stands at the glowing marker and presses F.",
       "image": null,
       "imageAlt": "Project screenshot",
-      "tags": ["three.js", "WebGPU", "JavaScript", "UI design"],
-      "links": [
-        { "label": "Live demo", "url": "#" },
-        { "label": "Source code", "url": "#" }
+      "tags": [
+        "three.js",
+        "WebGPU",
+        "JavaScript",
+        "UI design"
       ],
-      "placement": { "relativeTo": "spawn", "dx": 0, "dz": 26 }
+      "links": [
+        {
+          "label": "Live demo",
+          "url": "#"
+        },
+        {
+          "label": "Source code",
+          "url": "#"
+        }
+      ],
+      "placement": {
+        "relativeTo": "spawn",
+        "dx": 0,
+        "dz": 26
+      }
     }
-  ]
+  ],
+  "deprecated": true
 }

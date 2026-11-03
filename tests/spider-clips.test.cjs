@@ -37,6 +37,27 @@ test('the A-pose arm correction is on for ground locomotion and landings and off
   assert.match(clips, /'none' \(the default\) keeps the clips exactly as they were baked before/);
 });
 
+test('the second locomotion pass: leaned pack run, running jump, look-around idles, heading-aware lean', () => {
+  assert.match(sel.clips.run.src, /Male Locomotion Pack\/standard run\.fbx$/);
+  for (const n of ['runJump', 'idleLookA', 'idleLookB']) assert.equal(sel.clips[n].armRest, 'align', n);
+  assert.equal(sel.clips.runJump.hips, 'crouchOnly', 'the physics owns the height in the air');
+  if (manifest) { const m = (n) => manifest.clips[n].meta; assert.ok(m('runJump').airStart < 0.2 && m('runJump').airEnd > 0.4 && m('runJump').airEnd < m('runJump').duration); assert.ok(m('idleLookA').duration > 2 && m('idleLookB').duration > 2); }
+  const clips = read('js/spider-clips.js');
+  assert.match(clips, /AX\.right\.set\(1, 0, 0\)\.applyAxisAngle\(AX\.up, h\)/, 'lean and bank use the character own axes, not the world X and Z');
+  assert.doesNotMatch(clips, /rotateBoneWorld\([^)]*(X|Z)[,)]/, 'no world-axis lean');
+  assert.match(clips, /runJumpFrom/); assert.match(clips, /idleLookA/); assert.match(read('js/spider-install.js'), /spiderRunJump/);
+});
+
+test('final polish: stride correction when the cadence cap is reached, and a running-fall landing that mixes the stride landing with the hard landing', () => {
+  const clips = read('js/spider-clips.js');
+  assert.match(clips, /function strideIK\(k, fwd\)/); assert.match(clips, /strideMax: 1\.2/);
+  assert.match(clips, /S\.kStride = clamp\(want \/ rate, 1, C\.strideMax\)/, 'only what the cadence cap cannot cover is made up in stride length');
+  assert.match(clips, /S\.shot\.mix = \{ name: 'hardLand'/);
+  assert.match(clips, /impact > 14 && hs > 5 && animator\.has\('runJump'\)/);
+  // the swing-to-land branch comes first and is untouched
+  assert.ok(clips.indexOf('if (flipLand)') < clips.indexOf("impact > 14 && hs > 5"));
+});
+
 test('source FBX files named by the selection exist (when the downloads are present)', (t) => {
   const dir = join(root, 'content/spider-raimi/anims-src');
   if (!existsSync(dir)) return t.skip('no anims-src folder on this machine');

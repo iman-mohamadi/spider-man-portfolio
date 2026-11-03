@@ -239,3 +239,51 @@ What changed:
 Return to running: with forward held the crouch is blended with the run at most 35 % and gone in about 0.7 s (hips back at 0.9 m, peak leg bone speed 24-28 rad/s, no pop). Duration against physics: standing hard landing 0.9 s, jump landing 0.35 s, swing landing about 0.75 s.
 
 **Additional landing animations: not required.** The one real limitation is a true running landing (touch down at 8-25 m/s and carry on without a crouch); it is currently a 35 % crouch blended into the run, which reads as a small dip. If that ever needs to look better, the specific clip to look for on Mixamo is a landing that ends in a run, e.g. search "Falling To Landing" and "Running Jump" (use the landing part), downloaded FBX Binary, Without Skin, 30 fps, In Place. Not needed for this pass.
+
+## Second locomotion pass: the new Male Locomotion Pack and five single files
+
+Inventory (15 files, all parse, all 65 `mixamorig` bones, no bone missing from the Raimi skeleton; measurements in the model's source size, multiply speeds by 0.956):
+
+| File | What it is | Measured | Verdict |
+|---|---|---|---|
+| `Running.fbx` (new) | a 0.70 s jog | 4.74 m/s, 22 keys: **the same animation as `Action Adventure Pack/running.fbx`**, it replaced the faster 0.63 s Running (5.92 m/s) on disk | rejected: slower and more upright than the run it replaced (cadence 1.88x at 8.5 m/s, tilt 10°) |
+| `Male Locomotion Pack/standard run.fbx` | athletic run, leaned, low hips | 0.73 s, 4.42 m/s, tilt 26°, hips 0.84-0.93 | **USED run** (leaned silhouette; slip at 8.5 m/s 3.4 %, cadence 2.0x, below the 2.1x cap) |
+| `Male Locomotion Pack/idle.fbx` | neutral stand, 8.3 s | whole body drifts 2°, rigid, arms stiff | rejected |
+| `Male Locomotion Pack/walking.fbx` | walk | 1.66 m/s, same family as Walking.fbx | not needed (the game has no walk key; walking only exists for a tenth of a second while accelerating) |
+| `Male Locomotion Pack/jump.fbx` | standing jump, 2.2 s | | not used (jumping is kept as it is) |
+| `left/right strafe (walking).fbx` (4) | side steps, 1.7 and 4.5 m/s | | rejected: the body faces its direction of travel, there is no strafe |
+| `left/right turn 90.fbx` | turn on the spot | 90° of hips yaw, 0.93 s | rejected: the controller owns the heading |
+| `Running Jump.fbx` | running leap | 0.9 s, feet off 0.07-0.60 s, 4.7 m/s, lands in a stride and carries on | **USED runJump** for jumps at 5 m/s or faster (starts in a stride, lands into the run); `?spiderRunJump=0` restores the standing jump |
+| `Running To Turn.fbx` | run, brake, turn round 188°, stand | 2.27 s, ends standing | rejected: the controller reverses in about 0.5 s and the player is already running again |
+| `Running Right Turn.fbx` | veering turn, 36° | 0.77 s, hips yaw -36° | rejected as a clip (it rotates the body itself); its idea is done procedurally: bank and chest/head lead into the turn |
+| `Turn To Running.fbx` | turn 113° then run | unchanged from the earlier file | rejected, as before |
+| `Action Adventure Pack/idle (3).fbx`, `idle.fbx` | look-around idles, 3.3 and 4.0 s | head turns 51° and 71°, relaxed stance | **USED idleLookA/B**, played once now and then (every 6-11 s of standing) with 0.7 s fades |
+
+Findings of this pass:
+- **Lean bug (worked on every run).** The spine lean and bank were applied about the world X and Z axes, which is only right when the character faces +Z. Running any other way leaned the body sideways. They now use the character's own axes (forward lean at sprint 48-50° at four different headings, sideways lean 0-5°).
+- **The idle was a statue.** `Idle.fbx` moves under 1° at the spine and 5° anywhere (peak bone speed 0 rad/s over six seconds). A procedural breath and weight shift (about 1° of chest, 1° of hips and shoulders) is now added to the idle, and the look-around idles play now and then (peak 7 rad/s while standing, no pop at the start of a run).
+- Speed-based lean: grows from 6 m/s (0.025 rad per m/s, at most 0.22 rad), accelerating leans forward, braking back, the chest leads into turns.
+- Foot slip with the new run: 3.4 % at 8.5 m/s, 19 % at 15 m/s (sprint, unchanged); weaving 7.5-12 %.
+- **Comparison workflow:** `tools/anim-probe.js` `grid(rows)` (candidates as rows, moments of the cycle as columns, same model, scale, light and camera, baked from the FBX exactly as the converter would), `turnaround(items)` (front, side and rear of the same moment, floating above the street) and `stage(speed)` for the real state machine.
+
+Not done: a real-time play-through (the pane is too slow), the start-of-run and start-of-walk clips (none in the collections; if needed, Mixamo search "Start Running" / "Walking Start"), and a better running landing (the Running Jump landing covers jumps; falls still use the hard landing).
+
+## Final polish pass: sprint, starts and stops, landings out of a run
+
+**Sprint foot slip.** No clip in the 37 + 15 files is faster than `Sprint.fbx` (5.9 m/s on the Raimi legs; the rest are 4.2-5.7). Compared candidates: Sprint, the old Running (5.66), pack running (4.5), standard run (4.2): all would need 2.5-3.5x cadence at 15 m/s. Cadence stays capped at 2.1x; what the cap cannot cover is now made up by **stride correction** (`strideIK` in `js/spider-clips.js`): a two-bone leg solve on the clip's own pose that scales each foot's fore-aft reach by up to 1.2x (knee keeps its side, foot keeps the clip's orientation, legs stop short of straight). It acts only above about 12.4 m/s, never below, and not during landings.
+
+| Planted-toe slip | Before | After |
+|---|---|---|
+| Run 8.5 m/s | 3.4 % | 3.4 % (unchanged) |
+| Sprint 15 m/s | 18.5 % | **4.0 %** |
+| Sprint, hard weave | 9.1 % | 5.0 % |
+| Run weave | 7.5-12 % | 9.1 % |
+| Leg bone peak, sprint | 39 rad/s | 55 rad/s (the knees extend faster through the longer stride) |
+
+The knee peak is the price; the stride was looked at in a side still (wide stride, no hyperextension or twist). `strideMax` (in `cfg`) 1.0 turns it off.
+
+**Start-walk, start-run, walk-to-run, run-to-sprint clips: none exist** in either collection (checked all 52 files by name and by measurement: every locomotion clip is a steady cycle or a stop/turn). The existing speed blends (idle, walk, run, sprint on one phase) and the acceleration lean stand in for them; nothing was faked from an unsuitable clip. Run-to-stop exists (`run to stop`, in use) and no second one is needed.
+
+**Landing out of a run (fall, roof edge, building).** A fall with impact above 14 m/s while moving above 5 m/s now lands with the running jump's stride landing with the hard landing's crouch mixed in (30-65 % depending on impact); a still body keeps the plain hard landing, a swing release keeps the swing-to-land flip, jump landings are unchanged. Tested off a 189 m roof: weights run through runJump + hardLand into idle, peak bone speed 15 rad/s.
+
+**Not verified:** real-time motion. Stills and measurements only.

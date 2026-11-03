@@ -1223,6 +1223,13 @@ body[data-mode='helicopter'] .gauge-alt {
   clip-path: polygon(50% 0, 100% 100%, 50% 78%, 0 100%);
 }
 
+.portfolio-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  background: #ffc82e;
+  box-shadow: 0 0 0 2px #0b0f14, 0 0 0 3px rgba(255, 200, 46, 0.5);
+}
 .landmark-swatch {
   width: 9px;
   height: 9px;

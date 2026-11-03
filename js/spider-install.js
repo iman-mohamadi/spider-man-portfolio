@@ -2,6 +2,8 @@ import * as THREE from 'three/webgpu';
 import { createContactShadowMaterial } from './tsl-materials.js';
 import { loadSpiderModel } from './spider-model.js';
 import { loadRaimiModel } from './spider-model-raimi.js';
+import { loadBndModel } from './spider-model-bnd.js';
+import { createEyeController } from './spider-eyes.js';
 import { createSpiderRig } from './spider-anim.js';
 import { loadClipSet, createClipRig } from './spider-clips.js';
 import { createSpiderWorld } from './spider-world.js';
@@ -12,7 +14,7 @@ import { SpiderController } from './spider-controller.js';
 import { SpiderCamera, SPIDER_CAMERA } from './spider-camera.js';
 import { WebTargeting, TARGETING } from './spider-targeting.js';
 import { WebStrand } from './spider-web.js';
-import { PortfolioInteraction, loadContent } from './portfolio-interaction.js';
+import { PortfolioInteraction } from './portfolio-interaction.js';
 
 // Installs the playable Spider-Man prototype into the running city. Everything is additive and isolated: it registers one extra
 // entity ('spider') with the existing ThirdPersonControllerManager, owns its own controller / camera / web / portfolio UI, and is only
@@ -27,10 +29,14 @@ function loadCss(href) {
 
 async function installSpider({ scene, controllerManager, cameraSystem, selectMode, options = {} }) {
   loadCss(new URL('../css/spider.css', import.meta.url).href);
-  // Which character: the Raimi model (Mixamo skeleton) by default, the original PS4 model with ?spiderModel=ps4 or when the Raimi files cannot be loaded.
+  // Which character: the Brand New Day suit (Mixamo skeleton, eye morphs) by default; ?spiderModel=raimi the Raimi model (same skeleton), ?spiderModel=ps4 the original PS4
+  // model. A model whose files cannot be loaded falls back to the next one (bnd -> raimi -> ps4).
   const wantModel = new URLSearchParams(location.search).get('spiderModel');
   let model = null;
-  if (wantModel !== 'ps4') {
+  if (wantModel !== 'ps4' && wantModel !== 'raimi') {
+    try { model = await loadBndModel(); } catch (e) { console.warn('[spider] Brand New Day model unavailable, trying the Raimi model', e); }
+  }
+  if (!model && wantModel !== 'ps4') {
     try { model = await loadRaimiModel(); } catch (e) { console.warn('[spider] Raimi model unavailable, using the original model', e); }
   }
   if (!model) model = { ...(await loadSpiderModel({ textureSize: options.textureSize ?? 1024, hideOverlays: options.hideOverlays ?? true })), kind: 'ps4' };
@@ -53,6 +59,9 @@ async function installSpider({ scene, controllerManager, cameraSystem, selectMod
       if (cs) { rig = createClipRig({ root: model.root, visual, proc: rig, set: cs.set }); clipInfo = { source: cs.source, clips: Object.fromEntries(Object.entries(cs.set).map(([k, v]) => [k, { duration: +v.clip.duration.toFixed(2), speed: +v.info.speed.toFixed(2), contact: +v.info.contact.toFixed(2) }])) }; }
     } catch (e) { console.warn('[spider] clips unavailable, procedural animation only', e); }
   }
+  // the Brand New Day eyes (morph targets "Squint" / "Open" on the eye frame) follow the same state the rig gets
+  const eyes = createEyeController(model.root);
+  if (eyes && rig.update) { const baseUpdate = rig.update; rig.update = (dt, st) => { baseUpdate.call(rig, dt, st); eyes.update(dt, st); }; }
   const shadowGeo = new THREE.PlaneGeometry(1.0, 1.0);
   shadowGeo.rotateX(-Math.PI * 0.5);
   const contactShadow = new THREE.Mesh(shadowGeo, createContactShadowMaterial());
@@ -81,9 +90,9 @@ async function installSpider({ scene, controllerManager, cameraSystem, selectMod
   const web = new WebStrand(scene);
 
   // ---- portfolio (UI and content stay separate from the gameplay code)
-  const content = await loadContent();
+  // the projects (one source: content/profile.json) are given to it by main.js once the billboards have found their places: portfolio.setProjects([{ project, x, z }])
   const portfolio = new PortfolioInteraction({
-    scene, content, spawn,
+    scene, spawn,
     ground: (x, z) => controllerManager.getGroundHeight(x, z, 'person'),
     onOpen: () => { controller.paused = true; input.paused = true; controllerManager.resetInput(); input.reset(); input.releaseLock(); }, // the cursor is needed for the panel
     onClose: () => { controller.paused = false; input.paused = false; }
@@ -112,7 +121,7 @@ async function installSpider({ scene, controllerManager, cameraSystem, selectMod
   let toastOn = false, webOn = false;
   const handPos = new THREE.Vector3(), handDir = new THREE.Vector3(), lastHand = new THREE.Vector3();
   const api = {
-    entity, controller, camera, portfolio, web, model, rig, world, input, targeting, clipInfo,
+    entity, controller, camera, portfolio, web, model, rig, world, input, targeting, clipInfo, eyes,
     /** Makes Spider-Man the active mode and places him at the start (call before the first selectMode). */
     activate() {
       controllerManager.setMode('spider');

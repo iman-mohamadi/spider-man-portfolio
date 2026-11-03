@@ -9,8 +9,8 @@ Serve the repository root over HTTP (the project has no build step). Use `python
 | Input | Action |
 |---|---|
 | W A S D | Move, relative to the camera. On the rope: push / brake along the swing (W / S) and turn it (A / D) |
-| Shift | Sprint (on the ground). It has nothing to do with the web |
-| Space | Jump. On the rope: let go with a small hop |
+| Shift | Sprint (on the ground); also the parkour modifier: sprinting straight at a facade runs up it, and on a wall it crawls faster and, pressed while crawling, starts a wall run. It has nothing to do with the web |
+| Space | Jump; **again in the air: double jump** (once per airborne cycle; landing, a web, a wall or a cling refills it). On the rope: let go with a small hop. On a wall (running or crawling): jump off it, away and up |
 | Mouse | Look. The first click on the game captures the mouse (pointer lock); **Esc** frees it again |
 | **Left mouse button** | **Web.** Aim with the camera until the ring is on the building you want, then press: shoots at the selected point. **Hold** to swing, **release** to let go (momentum is kept) |
 | Wheel | Camera zoom |
@@ -99,3 +99,48 @@ Defaults changed in the tuning pass (no player feedback yet, so these are reason
 4. Press and hold the left mouse button: Spider-Man shoots to the ring (from the street he hops first). Hold W to pump, A / D to steer, release the button to let go; Space lets go with a hop. Tap-and-release quickly: the web stays up for a moment (0.18 s) and then lets go.
 5. Run (W), sprint (Shift), jump (Space) and land from height to see the run, airborne and landing poses.
 6. `?spiderDebug` gives `window.__spider` (`controller`, `camera`, `targeting`, `input`, `rig`) for inspection; `?spider=0` disables the prototype.
+
+### Wall traversal (no key): run, crawl, cling
+There is no button for walls: the way he moves catches them. One system, two states that hand over to each other (`wall` = the run, `cling` = the crawl and the cling), all numbers in `SPIDER` (`wall*`, `cling*`, `mantle*`).
+- **Catching a wall.** *Run*: in the air at 5.5 m/s or more with the stick toward or along a flat facade at least 5 m tall (a jump, a web release), or hitting a facade at 8 m/s or more at an angle (no stick needed: an impact keeps its momentum), or **sprinting (Shift) at 7.5 m/s or more straight at a facade from the ground**. *Crawl*: pushing the stick straight at a wall (within 45 degrees) at least 3.5 m tall for 0.3 s on the ground, 0.1 s in the air; or rising into the underside of a slab. Walking along or past a wall, a stick pointing away, a short, narrow or uneven wall never attach.
+- **The run** keeps the speed (a head-on approach turns into climb speed), up to 2 s. When it is over (stick released, time or speed gone, a corner) it hands over to the crawl with the same velocity, which is let go gently; he never just drops. A run that only met a corner goes on running on the next face while Shift is held.
+- **The crawl** moves along the surface with the stick as the camera sees it: with the camera at the wall W is up, S down, A / D left / right; looking along the wall W goes along it; the stick towards the wall climbs. 2.4 m/s, 4.8 with Shift, an analog stick scales it. Shift **pressed** while crawling along a wall starts a run. With no stick he stays where he is: **the cling** (no gravity, zero velocity, 0.5 m from the wall, hands and feet on it). A stick held round a corner keeps going round it.
+- **Leaving.** Space = jump off (away and up, the double jump is back and the wall can be caught again after 0.45 s, another wall at once). Left click with a target = web swing. Crawl down to the floor to stand; crawl up over the top edge for a **mantle**: he rises along the wall until his chest is 0.5 m under the roof, then goes over the edge onto the roof (about 3.2 m/s along that path, at least 0.55 s).
+- **Ceilings** only where the collision data has an underside: box colliders that start above the ground (bridge decks, landmark parts). Buildings are solid prisms with a roof but no underside, so an overhang of a building is never caught. Roofs, floors and slopes are never clung to.
+- **Camera** on a wall: 1.2 m further back, lower in the frame, and, while the mouse is idle and the camera already looks roughly that way (within 70 degrees), a gentle turn (0.7 per second) towards the wall (crawl) or along the run. It eases in and out; the mouse always wins.
+
+## Brand New Day suit (default character)
+
+`?spiderModel=raimi` loads the Raimi model, `?spiderModel=ps4` the original; a model that fails to load falls back (bnd -> raimi -> ps4). The suit is `content/spider-bnd/spider-bnd.glb`, converted from the
+user's download by `tools/bnd-lab.html` (see `content/spider-bnd/README.md`: decimated to ~167k triangles, UDIM textures packed into atlases, skinned to the Raimi Mixamo skeleton so every clip and the
+procedural rig work unchanged). The eye frame has the suit's `Squint` / `Open` morph targets, driven by `js/spider-eyes.js` from the rig state. **Licence unconfirmed: do not publish.**
+Verified: the file loads in the game (clips, rig and eye controller active), still renders of idle / swing / wall-cling poses, the two eye morphs rendered, unit tests. Not verified: real-time play.
+
+## Portfolio boards in Times Square
+
+All the portfolio boards (HQ, the projects, Skills, Contact) now hang on Times Square's own screens instead of being spread over the city, and the original generated posters there are removed.
+`buildings.js` lists the 95 screen slots (`ManhattanCityBlocks.userData.timesSquareSlots`); `portfolio-billboards.js` `allocateSlots` gives each board the best slot (a wide shape, at most 42 m up,
+in sight of a sidewalk, the identity board nearest the middle, F markers at least 16 m apart: they open within 6 m), draws it in the shape of the screen (a narrow screen gets the banner layout),
+and shows it with `createLedScreenMaterial` (LED pitch, bezel, a slow sweep and a pulsing ticker, brighter than the old posters so it blooms). Every other slot shows a decor screen of the profile
+(picture, kicker, title, text; a handful of textures reused). A board that finds no screen falls back to the old city-wide sites; `?portfolioTs=0` keeps the old city-wide boards and the posters.
+Verified: the console reports 11 boards + 84 decor screens, no poster left, 9 F points and the pins in the square, stills of the screens in the game, the map; unit tests. Not verified: frame rate
+in the square (the pane runs at 1-10 fps) and real-time play.
+
+## Headfirst freefall dive (`js/spider-freefall.js`)
+
+A long, fast fall (more than 9 m/s down for 0.08 s, at least 0.3 s in the air, 0.75 s or more to impact: a drop of ~14 m or more) turns into a headfirst dive. The module is pure: it reads the state the
+controller already gives the rig (vertical and horizontal speed, time to impact, swing / wall / cling / double-jump state, heading) and returns a target pose and weights; it moves nothing.
+`spider-anim.js` blends the pose into the air pose (`blendDive`: the head first, then chest and pelvis, then the arms, the legs last on the way in, the reverse on the way out; directions on the sphere,
+the whole-body pitch through the body quaternion's slerp), `spider-clips.js` forces the procedural layer on while the dive has weight and blends the clip pose per bone group (so the entry starts
+from the clip's actual pose), and `handPose` curls the fingers and straightens the wrists. The controller, physics, web and camera files are not touched.
+
+Pose: the body pitched 90 degrees + the dive angle (26..45 degrees below the horizon, following the velocity) about the chest, chest to the ground; slight chest inclination, no arch; arms swept back along
+the torso (upper arm ~19 degrees back, ~17 degrees out; forearm a little less back: slightly bent elbow); legs behind the pelvis, modest gap, knees slightly bent, toes pointed; fingers slightly curled.
+Phases: entry 0.38..0.62 s (faster the faster the fall), sustain (deterministic drift: sums of sines of the accumulated clock, damped the faster the fall), exit 0.1..0.3 s (landing: done before the
+touch-down, web 0.2 s, wall 0.18 s, double jump 0.2 s, slow-down 0.3 s). Faster falls tighten the pose (arms in and back, legs together and straighter) and steepen the body; turns twist the torso.
+Rigs: Mixamo (Raimi and Brand New Day models) and the original PS4 skeleton both go through `findBones` (hips, head, spine[3 or 7], thigh, knee, ankle, upper arm, forearm, hand). Fingers are the chains under
+the wrist; a model without finger bones (or with unskinned ones, as the Brand New Day model: its hands are rigid) just has no finger curl. Camera: unchanged; the chase camera sees the back, the trailing
+legs and the arms along the sides.
+Verified: unit tests (state machine, blending, pose, velocity response, determinism, ten-minute quaternion stability, rig mappings, wiring), scripted simulation in the real rig at 30 / 60 / 144 fps (poses agree within
+0.04 rad), restoration of every bone after a dive, still renders of both rigs, a real-controller drop from 170 m in the game camera (dive started at 10 m/s, sustained at terminal speed, let go ~0.55 s before the
+impact, upright landing). Not verified: real-time motion quality (the preview pane runs at ~1 fps) and a hand-played swing / wall transition.

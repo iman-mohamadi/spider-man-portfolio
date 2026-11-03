@@ -33,6 +33,7 @@ import {
 // about 29 degrees east of true north.
 
 const FONT = 'Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+const roundedRect = (ctx, x, y, w, h, r) => { ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r); ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath(); };
 const MIN_ZOOM = 0.015; // full map, pixels per metre: the whole harbour, Staten Island to the Bronx
 const MAX_ZOOM = 3.0; // single lots
 const RADAR_SCALE = 0.32; // radar pixels per metre on the ground (zooms out with altitude)
@@ -424,6 +425,19 @@ function drawWaypoint(ctx, x, y, r) {
 }
 
 const overlaps = (boxes, b) => boxes.some((o) => b[0] < o[2] && b[2] > o[0] && b[1] < o[3] && b[3] > o[1]);
+/**
+ * A label for a pin at (x, y) whose symbol is `half` px from its centre to its edge: the first free side of right, left, below, above. Returns { x, y, align, box } (text anchor,
+ * alignment and the rectangle it occupies) or null when no side is free; `placed` holds the rectangles already taken.
+ */
+function labelSpot(placed, x, y, half, tw) {
+  const g = 4, tries = [
+    { align: 'left', x: x + half + g, y: y + 4, box: [x + half + 1, y - 8, x + half + g + tw + 3, y + 8] },
+    { align: 'right', x: x - half - g, y: y + 4, box: [x - half - g - tw - 3, y - 8, x - half - 1, y + 8] },
+    { align: 'center', x, y: y + half + 13, box: [x - tw / 2 - 3, y + half + 1, x + tw / 2 + 3, y + half + 17] },
+    { align: 'center', x, y: y - half - 5, box: [x - tw / 2 - 3, y - half - 17, x + tw / 2 + 3, y - half - 1] }
+  ];
+  return tries.find((t) => !overlaps(placed, t.box)) || null;
+}
 
 class NYCMapSystem {
   constructor({ controllerManager, cameraSystem, trafficSystem, allBlocks = [], onTeleport, onToggle }) {
@@ -433,6 +447,7 @@ class NYCMapSystem {
     this.allBlocks = allBlocks;
     this.onTeleport = onTeleport;
     this.onToggle = onToggle;
+    this.portfolioPins = []; // [{ id, name, short, kind, x, z, heading }]: the owner's portfolio places (js/portfolio-billboards.js), drawn as yellow pins and clickable
 
     this.miniCanvas = document.getElementById('minimap-canvas');
     this.miniCtx = this.miniCanvas ? this.miniCanvas.getContext('2d') : null;
@@ -585,7 +600,9 @@ class NYCMapSystem {
         if (mx >= 0 && mx <= rect.width && my >= 0 && my <= rect.height) {
           const wPos = this.screenToWorld(mx, my, rect.width, rect.height);
           if (this.elHoverInfo) {
-            this.elHoverInfo.textContent = `${getLocationLabel(wPos.x, wPos.z)} · Click to teleport here`;
+            const pin = this.portfolioPinAt(mx, my, rect.width, rect.height);
+            this.fullCanvas.style.cursor = pin ? 'pointer' : '';
+            this.elHoverInfo.textContent = pin ? `${pin.name} · Click to go there` : `${getLocationLabel(wPos.x, wPos.z)} · Click to teleport here`;
           }
         }
       });
@@ -599,14 +616,16 @@ class NYCMapSystem {
           const mx = e.clientX - rect.left;
           const my = e.clientY - rect.top;
           if (mx >= 0 && mx <= rect.width && my >= 0 && my <= rect.height) {
-            const wPos = this.clampToManhattan(this.screenToWorld(mx, my, rect.width, rect.height));
+            const pin = this.portfolioPinAt(mx, my, rect.width, rect.height);
+            const wPos = pin ? { x: pin.x, z: pin.z } : this.clampToManhattan(this.screenToWorld(mx, my, rect.width, rect.height));
             this.waypoint = {
               x: wPos.x,
               z: wPos.z,
-              name: getLocationLabel(wPos.x, wPos.z)
+              name: pin ? pin.name : getLocationLabel(wPos.x, wPos.z)
             };
             if (this.onTeleport) {
-              this.onTeleport(wPos.x, wPos.z);
+              if (pin) this.onTeleport(wPos.x, wPos.z, pin.heading); // arrive in the street, looking at the board
+              else this.onTeleport(wPos.x, wPos.z);
             }
             this.renderFullMap();
           }
@@ -647,7 +666,8 @@ class NYCMapSystem {
     this.searchHighlight = q;
     this.searchPath = null;
     if (q.length > 0) {
-      const lmMatch = NYC_LANDMARKS.find((l) => l.name.toLowerCase().includes(q) || l.short.toLowerCase().includes(q));
+      const lmMatch = NYC_LANDMARKS.find((l) => l.name.toLowerCase().includes(q) || l.short.toLowerCase().includes(q))
+        || this.portfolioPins.find((l) => l.name.toLowerCase().includes(q) || l.short.toLowerCase().includes(q) || ('portfolio'.includes(q) && q.length > 2));
       const roads = ROAD_LABELS.filter((l) => l.lower.includes(q) || l.raw.includes(q));
       if (roads.length) {
         this.searchPath = new Path2D();
@@ -675,6 +695,20 @@ class NYCMapSystem {
       }
     }
     this.renderFullMap();
+  }
+
+  /** The owner's portfolio places (billboard sites): drawn on the full map as yellow pins and reachable by clicking them. */
+  setPortfolioPins(pins) { this.portfolioPins = Array.isArray(pins) ? pins : []; }
+
+  /** The portfolio pin under a point of the full map (CSS pixels from its top-left), within 15 px. Uses the same view as the drawing, so it holds when zoomed, panned or resized. */
+  portfolioPinAt(mx, my, width, height) {
+    let best = null, bd = 15;
+    for (const p of this.portfolioPins) {
+      const px = width * 0.5 + (p.x - this.viewCenterX) * this.viewZoom, py = height * 0.5 + (p.z - this.viewCenterZ) * this.viewZoom;
+      const d = Math.hypot(px - mx, py - my);
+      if (d < bd) { bd = d; best = p; }
+    }
+    return best;
   }
 
   cancelPan() {
@@ -1169,20 +1203,29 @@ class NYCMapSystem {
     const toX = (wx) => v.toX(wx);
     const toY = (wz) => v.toY(wz);
 
-    // 3. Iconic Landmark Pins & Collision-Free Labels (placed first: their boxes keep the other names clear)
+    // 3. Pins and their labels, collision-free. The portfolio pins are placed first (the owner's places must be findable), then the landmarks: a label takes the first free side of its
+    // pin (right, left, below, above) and is left out only when none is free. Pins themselves are never moved.
     ctx.font = `700 11px ${FONT}`;
     const placed = [];
+    const ppins = [];
+    for (const lm of this.portfolioPins) { // every pin's square is reserved first, so no label lands on another pin
+      const lx = toX(lm.x), ly = toY(lm.z);
+      if (Math.abs(lx) > w * 0.48 || Math.abs(ly) > h * 0.48) continue;
+      placed.push([lx - 10, ly - 10, lx + 10, ly + 10]);
+      ppins.push({ lm, lx, ly, label: null });
+    }
+    ctx.font = `800 11px ${FONT}`;
+    for (const pp of ppins) { pp.label = labelSpot(placed, pp.lx, pp.ly, 10, this.textWidth(ctx, pp.lm.short)); if (pp.label) placed.push(pp.label.box); }
+    ctx.font = `700 11px ${FONT}`;
     const pins = [];
     for (const lm of NYC_LANDMARKS) {
       const lx = toX(lm.x);
       const ly = toY(lm.z);
       if (Math.abs(lx) > w * 0.48 || Math.abs(ly) > h * 0.48) continue;
-      const labelW = this.textWidth(ctx, lm.short) + 6;
-      const box = [lx + 6, ly - 8, lx + 8 + labelW, ly + 7];
-      const showLabel = !overlaps(placed, box);
+      const label = labelSpot(placed, lx, ly, 6.5, this.textWidth(ctx, lm.short));
       placed.push([lx - 6, ly - 6, lx + 6, ly + 6]);
-      if (showLabel) placed.push(box);
-      pins.push({ lm, lx, ly, showLabel });
+      if (label) placed.push(label.box);
+      pins.push({ lm, lx, ly, label });
     }
 
     // 4. Borough, waterway & neighbourhood watermark titles (wherever they fit), letter-spaced like a printed atlas
@@ -1223,7 +1266,7 @@ class NYCMapSystem {
 
     ctx.font = `700 11px ${FONT}`;
     ctx.textAlign = 'left';
-    for (const { lm, lx, ly, showLabel } of pins) {
+    for (const { lm, lx, ly, label } of pins) {
       ctx.fillStyle = MAP.halo;
       ctx.beginPath();
       ctx.arc(lx, ly, 6.5, 0, Math.PI * 2);
@@ -1232,13 +1275,26 @@ class NYCMapSystem {
       ctx.beginPath();
       ctx.arc(lx, ly, 4.2, 0, Math.PI * 2);
       ctx.fill();
-      if (showLabel) {
+      if (label) {
+        ctx.textAlign = label.align;
         ctx.lineWidth = 3;
         ctx.strokeStyle = MAP.halo;
-        ctx.strokeText(lm.short, lx + 9, ly + 4);
+        ctx.strokeText(lm.short, label.x, label.y);
         ctx.fillStyle = '#ffffff';
-        ctx.fillText(lm.short, lx + 9, ly + 4);
+        ctx.fillText(lm.short, label.x, label.y);
       }
+    }
+
+    // portfolio pins on top: a taxi-yellow rounded square with a small symbol of what it is
+    for (const { lm, lx, ly, label } of ppins) {
+      ctx.fillStyle = MAP.halo; roundedRect(ctx, lx - 10, ly - 10, 20, 20, 6); ctx.fill();
+      ctx.fillStyle = '#ffc82e'; roundedRect(ctx, lx - 8, ly - 8, 16, 16, 5); ctx.fill();
+      ctx.strokeStyle = '#14171d'; ctx.fillStyle = '#14171d'; ctx.lineWidth = 1.8; ctx.lineCap = 'round';
+      if (lm.kind === 'hq') { ctx.beginPath(); ctx.arc(lx, ly - 2.6, 2.5, 0, Math.PI * 2); ctx.fill(); ctx.beginPath(); ctx.arc(lx, ly + 6, 5, Math.PI * 1.15, Math.PI * 1.85); ctx.stroke(); }
+      else if (lm.kind === 'project') { ctx.strokeRect(lx - 4.5, ly - 4, 9, 8); ctx.beginPath(); ctx.moveTo(lx - 4.5, ly - 1); ctx.lineTo(lx + 4.5, ly - 1); ctx.stroke(); }
+      else if (lm.kind === 'skills') { ctx.beginPath(); ctx.moveTo(lx - 1.5, ly - 4); ctx.lineTo(lx - 5, ly); ctx.lineTo(lx - 1.5, ly + 4); ctx.moveTo(lx + 1.5, ly - 4); ctx.lineTo(lx + 5, ly); ctx.lineTo(lx + 1.5, ly + 4); ctx.stroke(); }
+      else { ctx.strokeRect(lx - 5, ly - 3.5, 10, 7); ctx.beginPath(); ctx.moveTo(lx - 5, ly - 3.5); ctx.lineTo(lx, ly + 0.5); ctx.lineTo(lx + 5, ly - 3.5); ctx.stroke(); }
+      if (label) { ctx.font = `800 11px ${FONT}`; ctx.textAlign = label.align; ctx.lineWidth = 3; ctx.strokeStyle = MAP.halo; ctx.strokeText(lm.short, label.x, label.y); ctx.fillStyle = '#ffc82e'; ctx.fillText(lm.short, label.x, label.y); }
     }
 
     // 6. Scale bar (true metres); the true-north compass sits with the map controls (index.html)

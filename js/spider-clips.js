@@ -257,7 +257,7 @@ const CLIP_STATES = ['idle', 'walk', 'run', 'sprint'];
  */
 function createClipRig({ root, visual, proc, set, cfg = {} }) {
   const animator = new ClipAnimator(root, set);
-  const C = { sprintFrom: 9, sprintTo: 13, runStopFrom: 4.5, runJumpFrom: 5, ...cfg };
+  const C = { sprintFrom: 9, sprintTo: 13, runStopFrom: 4.5, runJumpFrom: 5, strideMax: 1.2, ...cfg };
   const R = proc.rig;
   const driven = [R.hips, R.head, ...R.spine, ...Object.values(R.L).filter((b) => b !== R.L.hand), ...Object.values(R.R).filter((b) => b !== R.R.hand)];
   const boneKind = (b) => b === R.hips ? 'hips' : R.spine.includes(b) ? 'spine' : b === R.head ? 'head' : [R.L.upper, R.L.fore, R.R.upper, R.R.fore].includes(b) ? 'arm' : 'leg';
@@ -267,8 +267,8 @@ function createClipRig({ root, visual, proc, set, cfg = {} }) {
   const hasAir = animator.has('fall') || animator.has('jump');
   const hasSwing = animator.has('swingLoop');
   const S = {
-    mode: 'ground', wSwing: 0, wWeb: 0, wLaunch: 0, wAirProc: 0, lean: 0, bank: 0, twist: 0, prevSpeed: 0, accel: 0, yawRate: 0, prevHeading: 0, init: false,
-    phase: 0, peakV: 0, webW: [new THREE.Quaternion(), new THREE.Quaternion()], idleT: 0, fallT: 0, wasGrounded: true, wasSwinging: false, lastAirVy: 0, lastSpeed: 0,
+    mode: 'ground', wSwing: 0, wWeb: 0, wLaunch: 0, wAirProc: 0, kStride: 1, t: 0, still: 0, nextLook: 5, lookIx: 0, lean: 0, bank: 0, twist: 0, prevSpeed: 0, accel: 0, yawRate: 0, prevHeading: 0, init: false,
+    wCling: 0, wasCling: false, phase: 0, peakV: 0, webW: [new THREE.Quaternion(), new THREE.Quaternion()], idleT: 0, fallT: 0, wasGrounded: true, wasSwinging: false, lastAirVy: 0, lastSpeed: 0,
     air: { jumped: false, vyUp: 10, t: 0, clip: 'jump' }, shot: null, sw: { t: 0 }, rel: { t: 99, flip: false, scrub: 0 }, vyK: 0, scrubT: 0.1, slots: {}
   };
 
@@ -282,17 +282,50 @@ function createClipRig({ root, visual, proc, set, cfg = {} }) {
   // swing clips come in two hands: `meta.hand` says which hand reaches for the web in the original, `<name>M` is the mirror image; webSide > 0 = the left hand holds the web
   const variant = (base, st) => { const m = ev(base); if (!m || !m.hand || m.hand === (st.webSide > 0 ? 'L' : 'R')) return base; return animator.has(base + 'M') ? base + 'M' : base; };
 
+  // Two-bone leg IK on the clip's pose: each foot keeps its height and sideways place, its fore-aft offset from the hip is multiplied by k (the knee keeps its side), and the
+  // foot keeps the clip's orientation. Out of reach, the leg stops just short of straight.
+  const IK = { hip: new THREE.Vector3(), knee: new THREE.Vector3(), foot: new THREE.Vector3(), tgt: new THREE.Vector3(), a: new THREE.Vector3(), b: new THREE.Vector3(), d: new THREE.Vector3(), qf: new THREE.Quaternion(), qa: new THREE.Quaternion() };
+  const setWorldQ = (bone, q) => { bone.parent.getWorldQuaternion(TMP.q3); bone.quaternion.copy(TMP.q3.invert()).multiply(q); bone.updateMatrix(); bone.updateMatrixWorld(true); };
+  function strideIK(k, fwd) {
+    for (const leg of [R.L, R.R]) {
+      const th = leg.thigh, kn = leg.knee, an = leg.ankle;
+      th.updateWorldMatrix(true, true);
+      th.getWorldPosition(IK.hip); kn.getWorldPosition(IK.knee); an.getWorldPosition(IK.foot);
+      const L1 = IK.hip.distanceTo(IK.knee), L2 = IK.knee.distanceTo(IK.foot);
+      IK.d.copy(IK.foot).sub(IK.hip); const z = IK.d.dot(fwd);
+      IK.tgt.copy(IK.d).addScaledVector(fwd, z * (k - 1)); // hip-relative target
+      let D = IK.tgt.length(); const maxD = (L1 + L2) * 0.985; if (D > maxD) { IK.tgt.multiplyScalar(maxD / D); D = maxD; }
+      IK.tgt.normalize();
+      // knee: along the hip-target line by a, out of it by h, on the side the clip's knee was
+      const a = (L1 * L1 - L2 * L2 + D * D) / (2 * D), hh = Math.sqrt(Math.max(0, L1 * L1 - a * a));
+      IK.a.copy(IK.knee).sub(IK.hip); IK.a.addScaledVector(IK.tgt, -IK.a.dot(IK.tgt)).normalize(); // pole direction
+      IK.b.copy(IK.tgt).multiplyScalar(a).addScaledVector(IK.a, hh).add(IK.hip); // new knee
+      an.getWorldQuaternion(IK.qf); // the foot keeps its orientation
+      th.getWorldQuaternion(IK.qa);
+      IK.d.copy(IK.knee).sub(IK.hip).normalize(); IK.a.copy(IK.b).sub(IK.hip).normalize();
+      TMP.q.setFromUnitVectors(IK.d, IK.a).multiply(IK.qa); setWorldQ(th, TMP.q);
+      // shin: from the knee (it moved with the thigh) to the target foot
+      kn.getWorldPosition(IK.knee); an.getWorldPosition(IK.foot); kn.getWorldQuaternion(IK.qa);
+      IK.d.copy(IK.foot).sub(IK.knee).normalize(); IK.b.copy(IK.tgt).multiplyScalar(D).add(IK.hip).sub(IK.knee).normalize();
+      TMP.q.setFromUnitVectors(IK.d, IK.b).multiply(IK.qa); setWorldQ(kn, TMP.q);
+      setWorldQ(an, IK.qf);
+    }
+  }
+
   /** Starts a one-shot (landing, stop): it plays from `from` at `rate` and fades in/out; the locomotion layer keeps running under it. */
-  function startShot(name, from, rate, { fadeIn = 0.05, fadeOut = 0.3, end = null, cancelSpeed = Infinity, maxW = 1 } = {}) {
+  function startShot(name, from, rate, { fadeIn = 0.05, fadeOut = 0.3, end = null, cancelSpeed = Infinity, maxW = 1, kill = Infinity } = {}) {
     if (!animator.has(name)) return;
     const dur = e(name).clip.duration;
-    S.shot = { name, t: from, rate, end: end ?? dur * 0.9, fadeIn, fadeOut, cancelSpeed, maxW, age: 0 };
+    S.shot = { name, t: from, rate, end: end ?? dur * 0.9, fadeIn, fadeOut, cancelSpeed, maxW, kill, age: 0 };
   }
 
   function update(dt, st) {
     dt = clamp(dt, 1e-4, 0.1);
-    const swinging = !!st.swinging, grounded = !!st.grounded && !swinging, hs = st.speed;
-    if (!S.init) { S.init = true; S.prevSpeed = hs; S.prevHeading = st.heading ?? 0; S.lastSpeed = hs; }
+    const swinging = !!st.swinging, clinging = !!st.cling && !swinging, onWall = !!st.wallRun && !swinging && !clinging, grounded = (!!st.grounded || onWall) && !swinging && !clinging, hs = st.speed; // a wall run uses the running clips (grounded locomotion), turned onto the wall by the procedural body frame
+    if (!S.init) { S.init = true; S.prevSpeed = hs; S.prevHeading = st.heading ?? 0; S.lastSpeed = hs; S.airJumpId = st.airJumpId; }
+    if (st.airJumpId !== undefined && st.airJumpId !== S.airJumpId) { // a second jump: the jump clip's rise again (scrubbed by the vertical speed), the procedural somersault comes from the body frame
+      S.airJumpId = st.airJumpId; S.air = { jumped: true, vyUp: Math.max(st.vy, 4), t: 0, clip: 'jump' }; S.shot = null; S.rel.flip = false; S.rel.t = 99;
+    }
     S.accel += (clamp((hs - S.prevSpeed) / dt, -80, 60) - S.accel) * (1 - Math.exp(-dt * 8));
     let dh = (st.heading ?? 0) - S.prevHeading; dh = Math.atan2(Math.sin(dh), Math.cos(dh)); S.prevHeading = st.heading ?? 0;
     S.yawRate += (clamp(dh / dt, -12, 12) - S.yawRate) * (1 - Math.exp(-dt * 12));
@@ -301,11 +334,17 @@ function createClipRig({ root, visual, proc, set, cfg = {} }) {
     if (S.wasGrounded && !grounded && !swinging) { // a jump or a step off an edge; a jump taken at running speed uses the running jump, which starts in a stride
       S.air = { jumped: st.vy > 4, vyUp: Math.max(st.vy, 4), t: 0, clip: S.lastSpeed >= C.runJumpFrom && animator.has('runJump') ? 'runJump' : 'jump' }; S.shot = null; S.rel.flip = false;
     }
-    if (!S.wasGrounded && !S.wasSwinging && grounded) { // touch-down
+    if (S.wasCling && !clinging && !grounded && !swinging) S.air = { jumped: st.vy > 3, vyUp: Math.max(st.vy, 4), t: 0, clip: 'jump' }; // let go of a surface: the jump clip's rise when thrown up, otherwise falling
+    if (!S.wasGrounded && !S.wasSwinging && grounded && !onWall && !S.wasCling) { // touch-down (catching a wall, or climbing down to the floor, is not one)
       const impact = -S.lastAirVy, flipLand = S.rel.flip && animator.has(variant('swingLand', st));
       S.rel.flip = false;
       // the swing-to-land clip ends in its crouch: play all of it, then hold the last pose a moment before the fade
       if (flipLand) { const n = variant('swingLand', st); startShot(n, ev(n).airEnd ?? 1.3, 1.0, { fadeIn: 0.04, fadeOut: 0.4, end: e(n).clip.duration + 0.2, cancelSpeed: 6.5 }); }
+      else if (impact > 14 && hs > 5 && animator.has('runJump') && animator.has('hardLand')) {
+        // a fall that lands while running (off a roof, from a building): the stride landing of the running jump, with the heavy crouch of the hard landing mixed in more the harder the impact
+        startShot('runJump', ev('runJump').airEnd ?? 0.6, 1.0, { fadeIn: 0.05, fadeOut: 0.3, end: e('runJump').clip.duration + 0.1 });
+        S.shot.mix = { name: 'hardLand', t: ev('hardLand').firstContact, rate: 1.3, k: clamp((impact - 14) / 30, 0.3, 0.65), end: e('hardLand').clip.duration * 0.5 };
+      }
       else if (impact > 14 && animator.has('hardLand')) startShot('hardLand', ev('hardLand').firstContact, 1.35, { fadeOut: 0.4, end: e('hardLand').clip.duration * 0.62, cancelSpeed: 5 });
       else if (S.air.clip === 'runJump' && S.air.jumped && hs > 3 && animator.has('runJump')) startShot('runJump', ev('runJump').airEnd ?? 0.6, 1.0, { fadeIn: 0.05, fadeOut: 0.22, end: e('runJump').clip.duration }); // lands in a stride: the clip carries on into the run
       else if (animator.has('jump') && (S.air.jumped || impact > 6)) startShot('jump', ev('jump').airEnd ?? 1.1, 1.4, { fadeIn: 0.04, fadeOut: 0.3, end: e('jump').clip.duration * 0.85, cancelSpeed: 4 });
@@ -317,16 +356,24 @@ function createClipRig({ root, visual, proc, set, cfg = {} }) {
       const n = variant('swingLand', st);
       if (animator.has(n) && st.landIn > 0.8 && st.landIn < 2.4 && hs > 5) S.rel.flip = true; // enough air for the flip, and moving
     }
-    if (!grounded && !swinging) S.lastAirVy = st.vy;
+    if ((!grounded || onWall) && !swinging) S.lastAirVy = clinging ? 0 : st.vy;
     if (!grounded) S.peakV = 0;
     if (!swinging) S.rel.t += dt;
     // run to a standstill: the stop clip settles the body (it plays in place; the body is already still)
     S.peakV = Math.max(hs, S.peakV * Math.exp(-dt * 3)); // the game brakes from a sprint to a standstill in a quarter of a second: remember the speed we came from
     if (grounded && !S.shot && S.peakV > C.runStopFrom && hs < 1.2 && animator.has('runStop')) { S.peakV = 0; startShot('runStop', 0.12, 1.5, { fadeIn: 0.05, fadeOut: 0.25, end: e('runStop').clip.duration * 0.7, cancelSpeed: 1.8 }); }
-    S.wasGrounded = grounded; S.wasSwinging = swinging; S.lastSpeed = hs;
+    // standing still for a while: now and then a look-around idle (a played-once shot that fades in and out of the breathing idle), so the stance is never a statue
+    S.t += dt; S.still = grounded && hs < 0.2 ? S.still + dt : 0;
+    if (S.still > S.nextLook && !S.shot && grounded) {
+      const n = S.lookIx++ % 2 ? 'idleLookB' : 'idleLookA';
+      if (animator.has(n)) startShot(n, 0, 1, { fadeIn: 0.7, fadeOut: 0.7, end: e(n).clip.duration, kill: 1.0 });
+      S.still = 0; S.nextLook = 6 + 5 * ((Math.sin(S.t * 12.9898) * 43758.5453) % 1 + 1) % 5;
+    }
+    S.wasGrounded = grounded; S.wasSwinging = swinging; S.wasCling = clinging; S.lastSpeed = hs;
 
     // ------------------------------------------------------------ slot requests
     const slots = S.slots; for (const k in slots) delete slots[k];
+    S.kStride = 1;
     // a one-shot (landing / stop) in progress: weight envelope, ends when the clip window ends or the body is running again
     let wShot = 0;
     if (S.shot) {
@@ -335,12 +382,19 @@ function createClipRig({ root, visual, proc, set, cfg = {} }) {
       sh.t += dt * sh.rate * (1 + 1.2 * running); // a body that is already running again gets the crouch over with sooner
       const left = sh.end - sh.t;
       wShot = sh.maxW * smoothstep(0, sh.fadeIn, sh.age) * smoothstep(0, sh.fadeOut, left) * (1 - 0.65 * running);
-      if (left <= 0 || !grounded) S.shot = null;
-      else animator.request(sh.name, sh.t, wShot, 22);
+      if (left <= 0 || !grounded || hs > sh.kill) S.shot = null;
+      else if (sh.mix) {
+        const m = sh.mix; m.t += dt * m.rate; const wm = wShot * m.k * smoothstep(0, 0.35, m.end - m.t);
+        animator.request(sh.name, sh.t, wShot - wm, 22); if (wm > 0.001) animator.request(m.name, Math.min(m.t, e(m.name).clip.duration - 1e-3), wm, 22);
+      } else animator.request(sh.name, sh.t, wShot, 22);
     }
     S.mode = swinging ? 'swing' : grounded ? 'ground' : 'air';
+    // the headfirst dive (spider-freefall.js): decided from the same state, never from the clips; the flip of a released swing keeps the body to itself
+    const dive = proc.freefall ? proc.freefall.update(dt, st, !!S.rel.flip) : null;
 
-    if (grounded) {
+    if (clinging) { // the climbing pose is procedural (no clip): the idle only keeps the mixer valid under it
+      if (animator.has('idle')) animator.request('idle', (S.idleT = (S.idleT + dt) % e('idle').clip.duration), 1, 10);
+    } else if (grounded) {
       // ground locomotion: idle <-> walk <-> run <-> sprint, one shared phase advanced at (ground speed / blended stride)
       const idleE = e('idle'), walkE = e('walk'), runE = e('run'), spE = e('sprint');
       const vW = walkE ? groundSpeedOf(walkE) : 1.7, vR = runE ? groundSpeedOf(runE) : 5.7;
@@ -356,8 +410,10 @@ function createClipRig({ root, visual, proc, set, cfg = {} }) {
       let stride = 0, dur = 0, norm = g.walk + g.run + g.sprint;
       for (const nme of ['walk', 'run', 'sprint']) if (g[nme] > 0) { const en = e(nme); stride += g[nme] / norm * groundSpeedOf(en) * en.clip.duration; dur += g[nme] / norm * en.clip.duration; }
       if (stride > 0.1 && hs > 0.15) {
-        const rate = Math.min(hs / stride, MAX_CADENCE / Math.max(0.2, dur)); // cycles per second keeping planted feet still, capped
+        const want = hs / stride, rate = Math.min(want, MAX_CADENCE / Math.max(0.2, dur)); // cycles per second keeping planted feet still, capped
         S.phase = (S.phase + dt * rate) % 1;
+        // what the cap cannot cover is made up in the length of the stride, not by running the legs faster: the feet's fore-aft reach is scaled (up to C.strideMax)
+        S.kStride = clamp(want / rate, 1, C.strideMax);
       }
       S.idleT = idleE ? (S.idleT + dt) % idleE.clip.duration : 0;
       const free = 1 - wShot; // a landing / stop clip owns the body while it plays (blending a little of a standing pose into a far-away pose would bend the shortest-path interpolation)
@@ -400,6 +456,9 @@ function createClipRig({ root, visual, proc, set, cfg = {} }) {
 
     animator.flush(dt, S.rel.flip || (S.shot && S.shot.name.startsWith('swingLand')) ? 30 : 14); // a flip rotates the whole body: the clips it replaces must be gone before the body is upside down
 
+    // ------------------------------------------------------------ stride correction: longer strides at the top speed without a faster cadence
+    if (grounded && !onWall && S.kStride > 1.01 && !S.shot) { const h = st.heading ?? 0; AX.fwd.set(0, 0, 1).applyAxisAngle(AX.up, h); strideIK(S.kStride, AX.fwd); }
+
     // ------------------------------------------------------------ procedural layer, per bone
     // per-bone share of the procedural swing pose (scaled by the smoothed wSwing, so it fades out with the release instead of switching): the web arm stays fully procedural
     const isWeb = (b) => b.kind === 'arm' && b.left === (st.webSide > 0);
@@ -410,11 +469,13 @@ function createClipRig({ root, visual, proc, set, cfg = {} }) {
     S.wSwing += ((swinging ? 1 : 0) - S.wSwing) * (1 - Math.exp(-dt * (swinging ? 14 : 8)));
     S.wWeb += ((swinging ? 1 : 0) - S.wWeb) * (1 - Math.exp(-dt * (swinging ? 20 : 8))); // the web arm reaches for the anchor within about a tenth of a second
     S.wAirProc += (alwaysProc - S.wAirProc) * (1 - Math.exp(-dt * (alwaysProc > S.wAirProc ? 12 : 8)));
-    let any = S.wLaunch;
-    const bw = snap.map((s) => { const t = Math.max(S.wLaunch, swingShare(s), S.wAirProc); any = Math.max(any, t); return Math.min(1, t); });
+    S.wCling += ((clinging ? 1 : 0) - S.wCling) * (1 - Math.exp(-dt * (clinging ? 9 : 6))); // climbing: the procedural pose owns every bone
+    const diveShare = (kind) => (!dive ? 0 : kind === 'head' ? dive.wHead : kind === 'arm' ? dive.wArms : kind === 'leg' ? dive.wLegs : dive.wBody); // the dive owns each part as far as its own weight
+    let any = Math.max(S.wLaunch, S.wCling, dive ? dive.wBody : 0);
+    const bw = snap.map((s) => { const t = Math.max(S.wLaunch, swingShare(s), S.wAirProc, S.wCling, diveShare(s.kind)); any = Math.max(any, t); return Math.min(1, t); });
     if (any > 0.002) {
       for (const s of snap) { s.q.copy(s.b.quaternion); s.p.copy(s.b.position); }
-      proc.update(dt, st); // the procedural pose (also tilts `visual`, locks feet, holds the web arm on the anchor)
+      (proc.updatePose || proc.update)(dt, st); // the procedural pose (also tilts `visual`, locks feet, holds the web arm on the anchor)
       // the web arm aims at the anchor in WORLD space; remember that aim, because blending the torso with the clip would turn the arm away with it
       const wa = st.webSide > 0 ? [R.L.upper, R.L.fore] : [R.R.upper, R.R.fore], hold = hasSwing ? S.wWeb * SWING_BONES.webArm : S.wSwing;
       if (hold > 0.002) for (let i = 0; i < 2; i++) wa[i].getWorldQuaternion(S.webW[i]);
@@ -432,9 +493,10 @@ function createClipRig({ root, visual, proc, set, cfg = {} }) {
       visual.quaternion.slerp(TMP.q.identity(), 1 - Math.exp(-dt * 10)); // back upright
       visual.position.set(0, 0, 0);
     }
+    if (proc.handPose) proc.handPose(S.wCling, S.wWeb, st.webSide, dive); // wrists flat on the wall, fingers open; in a dive the wrists follow the forearms and the fingers curl (the clips never touch them)
     // lean from acceleration (braking leans back) and from speed (the faster, the more the body leans into it), a bank into turns, and the chest leading into a turn, all on top
     // of the clip (not while the procedural pose owns the body). The axes are the CHARACTER'S (its right and its up, turned by the heading): the body is not facing +Z in the world.
-    const wClip = grounded ? 1 - clamp(any, 0, 1) : 0;
+    const wClip = grounded && !onWall ? 1 - clamp(any, 0, 1) : 0;
     if (wClip > 0.01) {
       const h = st.heading ?? 0; AX.right.set(1, 0, 0).applyAxisAngle(AX.up, h); AX.fwd.set(0, 0, 1).applyAxisAngle(AX.up, h);
       const targetLean = clamp(S.accel * 0.006, -0.3, 0.2) + clamp(0.025 * (hs - 6), 0, 0.22);
@@ -445,10 +507,20 @@ function createClipRig({ root, visual, proc, set, cfg = {} }) {
         rotateBoneWorld(top[i], AX.right, S.lean * wClip / top.length); rotateBoneWorld(top[i], AX.fwd, S.bank * wClip / top.length); rotateBoneWorld(top[i], AX.up, S.twist * wClip / top.length);
       }
       rotateBoneWorld(R.head, AX.up, S.twist * 0.5 * wClip); // the head looks into the turn first
+      // standing: breathing and a slow weight shift on top of the idle clip, whose own motion is under a degree (a statue otherwise)
+      const wi = (animator.w.idle || 0) * wClip * (S.shot ? 1 - wShot : 1);
+      if (wi > 0.02) {
+        const br = Math.sin(S.t * 1.7), sway = Math.sin(S.t * 0.55 + 1.3);
+        for (let i = 0; i < top.length; i++) { rotateBoneWorld(top[i], AX.right, 0.012 * br * wi); rotateBoneWorld(top[i], AX.fwd, 0.014 * sway * wi); }
+        rotateBoneWorld(R.hips, AX.fwd, -0.02 * sway * wi); rotateBoneWorld(R.head, AX.right, -0.01 * br * wi);
+      }
     }
   }
 
-  return { ...proc, enabled: true, update, animator, clipState: S, usesClips: true, clipConfig: C };
+  /** The clip layers, the procedural layer and the body frame (somersault / wall alignment) of the procedural rig, which runs every frame. */
+  function updateAll(dt, st) { update(dt, st); if (proc.bodyFrame) proc.bodyFrame(dt, st); }
+
+  return { ...proc, enabled: true, update: updateAll, animator, clipState: S, usesClips: true, clipConfig: C };
 }
 
 

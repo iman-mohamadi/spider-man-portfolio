@@ -1,0 +1,159 @@
+{
+  "schemaVersion": 2,
+  "note": "The single source of truth for the portfolio: billboards, map pins and the F-key project panel all read this file (see js/portfolio-content.js for every field). Only filled fields are shown; nothing is invented.",
+  "name": "Iman Mohammadi",
+  "role": "Senior Full-Stack & 3D Web Engineer",
+  "tagline": "Building scalable web experiences, UI systems and immersive 3D applications.",
+  "website": "https://iman-mhmdi.ir",
+  "photo": "profile/photo.jpg",
+  "tech": [
+    "Vue.js",
+    "Nuxt.js",
+    "React",
+    "Next.js",
+    "TypeScript",
+    "Three.js",
+    "Node.js",
+    "Tailwind CSS"
+  ],
+  "links": [
+    {
+      "label": "LinkedIn",
+      "url": "https://www.linkedin.com/in/iman-mohammadiii/"
+    },
+    {
+      "label": "Website",
+      "url": "https://iman-mhmdi.ir"
+    }
+  ],
+  "projects": [
+    {
+      "id": "raya-ui",
+      "title": "Raya UI",
+      "category": "UI Library",
+      "tagline": "A copy-paste Vue and Nuxt component library built on accessible primitives.",
+      "description": "A modern Vue and Nuxt component library focused on reusable, customizable and accessible UI components. Components are built on Reka UI primitives, copied into your project so you own the code, and come with a developer-friendly installation and documentation experience.",
+      "image": "projects/raya-ui.webp",
+      "imageAlt": "Raya UI home page: the RAYA wordmark on a dark background",
+      "tags": [
+        "Vue.js",
+        "Nuxt",
+        "TypeScript",
+        "Reka UI",
+        "Tailwind CSS",
+        "UI Library"
+      ],
+      "url": "https://raya-ui.com/"
+    },
+    {
+      "id": "woodcoder",
+      "title": "Woodcoder",
+      "category": "3D Product Configurator",
+      "tagline": "Design your own furniture in an interactive 3D configurator.",
+      "description": "A 3D product configuration platform that enables users to customize furniture and products through interactive 3D scenes and configurable product rules. Customers design beds, wardrobes, cabinets and more, then order flat-pack pieces made to their dimensions.",
+      "image": "projects/woodcoder.webp",
+      "imageAlt": "Woodcoder home page showing a 3D chest of drawers",
+      "tags": [
+        "Three.js",
+        "Vue.js",
+        "3D",
+        "Product Configurator",
+        "WebGL"
+      ],
+      "url": "https://woodcoder.com/"
+    },
+    {
+      "id": "hotelyar",
+      "title": "Hotelyar",
+      "category": "Hotel Booking Platform",
+      "tagline": "Online hotel booking across Iran, in Persian and English.",
+      "description": "A hotel booking platform with multilingual support and a modern user experience for discovering and booking accommodation: search by city or hotel, compare prices, photos and traveller reviews, and book online.",
+      "image": "projects/hotelyar.webp",
+      "imageAlt": "Hotelyar home page with hotel search",
+      "tags": [
+        "Nuxt",
+        "Vue.js",
+        "Hotel Booking"
+      ],
+      "url": "https://hotelyar.com/"
+    },
+    {
+      "id": "tricup",
+      "title": "Tricup",
+      "category": "AI Football Analytics",
+      "tagline": "AI-powered football predictions and match analysis.",
+      "description": "An AI-powered football prediction and match analysis platform designed to provide users with football insights and interactive analysis features.",
+      "image": null,
+      "tags": [
+        "Next.js",
+        "React",
+        "Tailwind CSS",
+        "AI",
+        "Football Analytics"
+      ],
+      "url": "https://tricup.ir/"
+    },
+    {
+      "id": "tinyhub",
+      "title": "TinyHub",
+      "category": "Developer Tools",
+      "tagline": "Minimal browser tools for developers: JSON formatter and more.",
+      "description": "A lightweight collection of browser-based utilities for developers, including a JSON formatter and beautifier, text sharing and a link shortener, in a distraction-free interface.",
+      "image": "projects/tinyhub.webp",
+      "imageAlt": "TinyHub home page",
+      "tags": [
+        "Next.js",
+        "Web Tools",
+        "JSON",
+        "Developer Utilities"
+      ],
+      "url": "https://tinyhub.ir/"
+    },
+    {
+      "id": "rizo-tools",
+      "title": "Rizo Tools",
+      "category": "Developer Tools",
+      "tagline": "43 private, client-side developer tools in one place.",
+      "description": "A collection of online tools and utilities for developers: 43 client-side tools for JSON, encoding, security, dates and Persian text. Everything runs in the browser, with no uploads and no accounts.",
+      "image": "projects/rizo-tools.webp",
+      "imageAlt": "Rizo Tools home page",
+      "tags": [
+        "Next.js",
+        "Developer Tools",
+        "Web Utilities"
+      ],
+      "url": "https://tools.rizo.top/"
+    },
+    {
+      "id": "rizo-weather",
+      "title": "Rizo Weather",
+      "category": "Weather Application",
+      "tagline": "Current weather, hourly and 10-day forecasts in the browser.",
+      "description": "A web-based weather application for checking weather conditions and forecasts: current temperature, feels-like, wind, humidity, UV, sunrise and sunset, air quality, plus hourly and 10-day forecasts, maps and historical data.",
+      "image": "projects/rizo-weather.webp",
+      "imageAlt": "Rizo Weather showing current weather in Tehran",
+      "tags": [
+        "Nuxt",
+        "Vue.js",
+        "Weather"
+      ],
+      "url": "https://weather.rizo.top/"
+    },
+    {
+      "id": "car-portfolio",
+      "title": "3D Car Portfolio",
+      "category": "Interactive 3D Portfolio",
+      "tagline": "A personal portfolio you explore by driving through a 3D city.",
+      "description": "An interactive personal portfolio experience presented through a 3D car and a game-like environment, allowing visitors to explore professional information through an immersive interface. A plain-text version of the portfolio is available too.",
+      "image": "projects/car-portfolio.webp",
+      "imageAlt": "3D Car Portfolio intro screen over a low-poly city",
+      "tags": [
+        "Three.js",
+        "WebGL",
+        "3D",
+        "Interactive Experience"
+      ],
+      "url": "https://car.iman-mhmdi.ir/"
+    }
+  ]
+}

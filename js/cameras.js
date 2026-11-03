@@ -34,6 +34,7 @@ class CameraSystem {
     this.orbitPitchOffset = 0.09;
     this.zoomMultiplier = 1.0;
     this.isDragging = false;
+    this.dragEnabled = true; // a mode with its own mouse look (Spider-Man, pointer lock) turns the generic drag-to-orbit off while it owns the camera
     this.userOrbitTimer = 0;
 
     this.currentPos = new THREE.Vector3(0, 10, 380);
@@ -58,6 +59,7 @@ class CameraSystem {
     canvas.style.touchAction = 'none';
 
     canvas.addEventListener('pointerdown', (e) => {
+      if (!this.dragEnabled || document.pointerLockElement === canvas) return; // the camera is owned by something else: do not start a drag (it would leave a stale pointer behind)
       if (e.button !== 0 || pointers.size >= 2) return;
       // Only two touch pointers may share a gesture; mouse and pen drags stay independent.
       if (pointers.size && (e.pointerType !== 'touch' || pointers.values().next().value.type !== 'touch')) return;
@@ -104,6 +106,7 @@ class CameraSystem {
     };
     this._clearPointers = clearPointers;
     window.addEventListener('blur', clearPointers);
+    document.addEventListener('pointerlockchange', clearPointers); // locking or unlocking the mouse ends any drag in progress
     document.addEventListener('visibilitychange', () => {
       if (document.hidden) clearPointers();
     });

@@ -3,3 +3,6 @@ Thumbs.db
 *.log
 node_modules/
 .claude/
+
+# the downloaded Brand New Day source files (660 MB zip: over GitHub's 100 MB limit; licence unconfirmed). The converted model is content/spider-bnd/.
+spider-man_brand-new-day/

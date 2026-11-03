@@ -3,6 +3,8 @@
   "dir": "/content/spider-raimi/anims-src/",
   "clips": {
     "idle":       { "src": "Idle.fbx",                                  "hips": "full",       "rootXZ": "strip", "armRest": "align" },
+    "idleLookA":  { "src": "Action Adventure Pack/idle (3).fbx",        "hips": "full",       "rootXZ": "strip", "armRest": "align" },
+    "idleLookB":  { "src": "Action Adventure Pack/idle.fbx",            "hips": "full",       "rootXZ": "strip", "armRest": "align" },
     "walk":       { "src": "Walking.fbx",                               "hips": "full",       "rootXZ": "detrend", "armRest": "align", "armSpread": 5 },
     "run":        { "src": "Male Locomotion Pack/standard run.fbx",           "hips": "full",       "rootXZ": "detrend", "armRest": "align", "armSpread": 4 },
     "sprint":     { "src": "Sprint.fbx",                                "hips": "full",       "rootXZ": "detrend", "armRest": "align", "armSpread": 12 },

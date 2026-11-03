@@ -2635,6 +2635,34 @@ function createBillboardMaterial(themeIndex = 0) {
 }
 
 /**
+ * A Times Square LED screen showing `map` (a canvas texture): the same look as the poster screens of createBillboardMaterial (fine RGB LED pitch, a dark cabinet bezel, a
+ * slow spotlight sweep and a pulsing ticker band along the foot), brighter than the poster so it blooms. The sweep is offset by the screen's place in the world, so neighbouring
+ * screens do not pulse together; one material per texture.
+ */
+const _ledCache = new WeakMap();
+function createLedScreenMaterial(map) {
+  if (_ledCache.has(map)) return _ledCache.get(map);
+  const mat = new THREE.MeshBasicNodeMaterial();
+  mat.toneMapped = false;
+  mat.colorNode = Fn(() => {
+    const p = uv();
+    const t = time.add(positionWorld.x.add(positionWorld.z).mul(0.043));
+    const base = texture(map, p).xyz;
+    const ledX = sin(p.x.mul(420.0)).mul(0.035).add(0.965);
+    const ledY = sin(p.y.mul(240.0)).mul(0.045).add(0.955);
+    const bezel = smoothstep(0.0, 0.012, p.x).mul(smoothstep(0.0, 0.02, p.y))
+      .mul(float(1.0).sub(smoothstep(0.988, 1.0, p.x))).mul(float(1.0).sub(smoothstep(0.98, 1.0, p.y)));
+    const sweepPos = sin(t.mul(0.9)).mul(0.4).add(0.5);
+    const sweep = pow(clamp(float(1.0).sub(abs(p.x.sub(sweepPos)).mul(2.6)), 0.0, 1.0), 3.0).mul(0.22);
+    const band = float(1.0).sub(step(0.045, p.y));
+    const pulse = smoothstep(0.2, 0.8, sin(p.x.mul(60.0).add(t.mul(4.0)))).mul(band).mul(0.3);
+    return base.mul(float(1.3).add(sweep)).add(base.mul(pulse)).mul(ledX).mul(ledY).mul(bezel);
+  })();
+  _ledCache.set(map, mat);
+  return mat;
+}
+
+/**
  * Tileable wind-wave texture shared by every water surface, synthesised once on the CPU: a random-phase directional
  * wind-sea spectrum (k^-4 saturation range above a spectral peak, cos² spreading) inverse-FFT'd to height & slopes.
  * RGBA half-float: R,G = slope (dh/du, dh/dv in tile units, unit RMS), B = squared slope, A = height (unit RMS).
@@ -3403,6 +3431,7 @@ export {
   createSidewalkMaterial,
   createCurbMaterial,
   createBillboardMaterial,
+  createLedScreenMaterial,
   createWaterMaterial,
   createParkLawnMaterial,
   createSteamMaterial,
