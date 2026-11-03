@@ -9,7 +9,7 @@ const read = (p) => readFileSync(join(root, p), 'utf8');
 
 // ------------------------------------------------------------------ fakes
 const calls = { drawImage: 0, canvases: 0, images: [] };
-const ctx = new Proxy({}, { get: (t, k) => (k in t ? t[k] : k === 'measureText' ? (s) => ({ width: String(s).length * 20 }) : k === 'createLinearGradient' ? () => ({ addColorStop() {} }) : k === 'drawImage' ? () => { calls.drawImage++; } : () => {}), set: (t, k, v) => { t[k] = v; return true; } });
+const ctx = new Proxy({}, { get: (t, k) => (k in t ? t[k] : k === 'measureText' ? (s) => ({ width: String(s).length * 20 }) : (k === 'createLinearGradient' || k === 'createRadialGradient') ? () => ({ addColorStop() {} }) : k === 'drawImage' ? () => { calls.drawImage++; } : () => {}), set: (t, k, v) => { t[k] = v; return true; } });
 const document = { createElement: () => { calls.canvases++; return { width: 0, height: 0, getContext: () => ctx }; } };
 class FakeImage { set src(u) { calls.images.push(u); setTimeout(() => (/missing/.test(u) ? this.onerror() : this.onload()), 0); this.width = 800; this.height = 600; } }
 class Obj { updateMatrixWorld() {} constructor() { this.children = []; this.position = { x: 0, y: 0, z: 0, set(x, y, z) { this.x = x; this.y = y; this.z = z; } }; this.rotation = { y: 0 }; this.userData = {}; } add(...c) { this.children.push(...c); } }
@@ -199,4 +199,48 @@ test('profileBoards without Times Square screens is unchanged: no posters are to
   const scene = { add() {}, traverse() { throw new Error('the scene is not searched'); } };
   const res = await B.profileBoards({ THREE, scene, world: city(14), profile: profile(2), sites: sitesFor(14), rules, timesSquare: { slots: [] }, log: () => {} });
   assert.equal(res.timesSquare, null); assert.equal(res.pins.length, 5);
+});
+
+// ------------------------------------------------------------------ Times Square decor: varied, never the same few boards over and over
+const decorProfile = (np) => ({ name: 'Iman Mohammadi', role: 'Full-stack Engineer', tagline: 't', website: null, photo: null, tech: ['Vue.js', 'Nuxt.js', 'TypeScript', 'Three.js', 'Node.js', 'Tailwind', 'React', 'Python'], links: [{ label: 'Mail', url: 'https://x.dev' }, { label: 'GitHub', url: 'https://g.dev' }],
+  projects: Array.from({ length: np }, (_, i) => ({ id: 'p' + i, title: 'Project ' + i, tagline: 'A line about project ' + i, description: 'd', image: 'i', imageUrl: 'u', tags: ['T' + i, 'Web'], url: 'https://p' + i + '.dev', links: [], featured: false, category: 'Cat' + (i % 3) })) });
+// 90 screens along a canyon: walls of 6 screens (tiers) every 40 m on both sides, in the three shapes
+const canyon = () => { const slots = []; for (let k = 0; k < 15; k++) for (const side of [-1, 1]) for (let t = 0; t < 3; t++) { const shape = [[18, 9], [11, 11], [8, 14]][(k + t) % 3]; slots.push({ x: side * 30, y: 14 + t * 12, z: -k * 40, w: shape[0], h: shape[1], rotY: side > 0 ? -Math.PI / 2 : Math.PI / 2 }); } return slots; };
+
+test('decor designs: many different ones from the profile, a picture only where there is one, never the owner\'s photo again', () => {
+  const p = decorProfile(8), by = B.decorDesigns({ profile: p, imgs: p.projects.map((_, i) => (i === 3 ? null : { width: 800, height: 600 })) });
+  const all = Object.values(by).flat(); assert.ok(all.length >= 50, 'a big pool: ' + all.length); assert.equal(new Set(all.map((d) => d.id)).size, all.length, 'every design is its own');
+  assert.equal(by.hero.length, 7, 'a project whose image did not load gets no hero'); assert.ok(by.hero.every((d) => d.img));
+  assert.ok(!all.some((d) => d.img && d.content === 'hq'), 'the photo is only on the identity board'); assert.ok(by.word.length >= 8 && by.art.length >= 6 && by.ticker.length >= 3 && by.url.length === 8);
+  const themes = new Set(all.map((d) => d.theme)); assert.ok(themes.size >= 5, 'a range of colours');
+  const none = B.decorDesigns({ profile: { ...decorProfile(0), tech: [], links: [] }, imgs: [] }); assert.ok(Object.values(none).flat().length >= 7, 'a profile with no projects still has name tickers and art');
+  for (const cls of ['wide', 'square', 'tall']) assert.ok(B.decorPool(by, cls, 12).length === 12);
+  const wide = B.decorPool(by, 'wide', 24).map((d) => d.id), tall = B.decorPool(by, 'tall', 12).map((d) => d.id); assert.ok(wide.filter((id) => tall.includes(id)).length < 6, 'the shapes do not all show the same designs');
+});
+
+test('decor planning: neighbours differ, equal designs and subjects are far apart, nothing is used more than a few times, and the key boards\' subjects are kept away from their copies', () => {
+  const slots = canyon(), p = decorProfile(8), by = B.decorDesigns({ profile: p, imgs: p.projects.map(() => ({ width: 800, height: 600 })) });
+  const used = new Set([10, 11, 50]), primaries = [...used].map((i, k) => ({ slot: slots[i], content: 'p:p' + k }));
+  const plan = B.planDecor({ slots, used, primaries, by }); assert.equal(plan.size, slots.length - used.size, 'every free screen has a design');
+  const again = B.planDecor({ slots, used, primaries, by }); assert.deepEqual([...plan].map(([i, d]) => [i, d.id]), [...again].map(([i, d]) => [i, d.id]), 'fixed, not random');
+  const counts = new Map(); for (const d of plan.values()) counts.set(d.id, (counts.get(d.id) || 0) + 1);
+  assert.ok(new Set([...plan.values()].map((d) => d.id)).size >= 35, 'at least 35 different designs on ' + plan.size + ' screens'); assert.ok(Math.max(...counts.values()) <= 5, 'none repeated more than 5 times: ' + Math.max(...counts.values()));
+  const near = (a, b) => Math.hypot(a.x - b.x, a.z - b.z) + Math.abs(a.y - b.y) * 0.6, list = [...plan].map(([i, d]) => ({ i, d, s: slots[i] }));
+  let sameDesign = 1e9, sameWallSameStyle = 0, stack = 0;
+  for (let a = 0; a < list.length; a++) for (let b = a + 1; b < list.length; b++) {
+    const A = list[a], Bn = list[b], dist = near(A.s, Bn.s), sameWall = Math.abs(A.s.rotY - Bn.s.rotY) < 0.05 && Math.hypot(A.s.x - Bn.s.x, A.s.z - Bn.s.z) < 50;
+    if (A.d.id === Bn.d.id) sameDesign = Math.min(sameDesign, dist);
+    if (sameWall && Math.hypot(A.s.x - Bn.s.x, A.s.z - Bn.s.z) < 25 && A.d.style === Bn.d.style) sameWallSameStyle++;
+    if (sameWall && A.d.content === Bn.d.content) stack++;
+  }
+  assert.ok(sameDesign >= 40, 'an identical design is never closer than 40 m: ' + Math.round(sameDesign)); assert.equal(stack, 0, 'one subject is never stacked on a wall'); assert.ok(sameWallSameStyle <= 2, 'neighbouring screens differ in style: ' + sameWallSameStyle);
+  for (const pr of primaries) for (const { i, d } of list) if (d.content === pr.content) assert.ok(near(pr.slot, slots[i]) >= 50, `a copy of ${pr.content} is ${Math.round(near(pr.slot, slots[i]))} m from its board`);
+  // a screen shape only gets designs of its own pool
+  const styles = new Set([...plan.values()].map((d) => d.style)); assert.ok(styles.size >= 5, 'a mix of styles: ' + [...styles]);
+});
+
+test('every decor style draws without error', () => {
+  const p = decorProfile(3), img = { width: 800, height: 600 }, by = B.decorDesigns({ profile: p, imgs: [img, img, img] });
+  for (const d of Object.values(by).flat()) assert.doesNotThrow(() => B.drawDecor(ctx, { ...d, img: d.img ? img : null }), d.id);
+  assert.ok(B.THEMES.length >= 6 && B.THEMES.every((t) => t.bg.length === 2 && t.accent && t.ink));
 });

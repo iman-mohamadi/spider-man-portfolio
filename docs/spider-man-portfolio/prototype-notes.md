@@ -144,3 +144,11 @@ legs and the arms along the sides.
 Verified: unit tests (state machine, blending, pose, velocity response, determinism, ten-minute quaternion stability, rig mappings, wiring), scripted simulation in the real rig at 30 / 60 / 144 fps (poses agree within
 0.04 rad), restoration of every bone after a dive, still renders of both rigs, a real-controller drop from 170 m in the game camera (dive started at 10 m/s, sustained at terminal speed, let go ~0.55 s before the
 impact, upright landing). Not verified: real-time motion quality (the preview pane runs at ~1 fps) and a hand-played swing / wall transition.
+
+### Times Square decor screens: a varied pool, not repeats
+
+The 84 screens that are not key boards no longer repeat five boards. `decorDesigns` builds ~65 designs from the profile in seven styles (project hero picture, colour poster, giant keyword, scrolling ticker,
+website banner, a count such as "8 PROJECTS", abstract web art) in seven Times Square colour themes; `decorPool` gives each screen shape (wide / square / tall) its own part of the pool (24 / 12 / 12 designs,
+at 960x480 / 640x640 / 512x768); `planDecor` assigns them greedily so that the same subject stays ~180 m away from itself and from the key board about it, an identical design ~240 m, no style sits
+next to itself on a wall and nothing is stacked twice. Measured on the real city: 39 designs on 84 screens, none more than 5 times, the closest identical pair 53 m apart, no subject stacked on a wall,
+the closest copy of a key board's subject 51 m away. The owner's photo is only on the identity board.

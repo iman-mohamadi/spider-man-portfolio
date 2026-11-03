@@ -265,7 +265,7 @@ test('createRoadPaintChunkBuilder subdivides long strips across cells with conti
 });
 
 test('createRoadPaintMaterial caches one material, gates dry/distant noise, and fades smoothly before cull distance', () => {
-  const source = readFileSync(join(__dirname, '../js/tsl-materials.js'), 'utf8');
+  const source = readFileSync(join(__dirname, '../js/tsl-materials.js'), 'utf8').split(String.fromCharCode(13)).join(''); // a Windows checkout has CRLF line endings
   const sliceBetween = (a, b) => {
     const s = source.indexOf(a);
     const e = source.indexOf(b, s);

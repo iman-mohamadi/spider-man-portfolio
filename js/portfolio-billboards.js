@@ -270,6 +270,178 @@ function coverWindow(ta, sa) {
   const f = sa / ta; return [0.5 - f / 2, 0, 0.5 + f / 2, 1];
 }
 
+// ---------------------------------------------------------------------------------------------------------------- Times Square decor
+// The screens that are not one of the boards show a POOL OF VARIED DESIGNS made from the profile (never the same few boards over and over): full-picture heroes of the projects, bright
+// colour posters, giant single keywords, scrolling tickers, website banners and abstract web art in the colours of Times Square. planDecor() gives each screen the design that is
+// least like the ones around it: the same content is kept far apart, neighbours on one wall never share a style, and the key boards' own contents are kept away from their copies.
+const THEMES = [
+  { bg: ['#c8102e', '#5e0818'], accent: '#ffc82e', ink: '#ffffff', dark: '#1a0508' },   // the suit's red
+  { bg: ['#0f4cc4', '#04184a'], accent: '#7fe0ff', ink: '#ffffff', dark: '#030c28' },   // blue
+  { bg: ['#ffc82e', '#e07800'], accent: '#c8102e', ink: '#14110a', dark: '#14110a', light: true }, // gold
+  { bg: ['#ff2d95', '#5a14d8'], accent: '#00f0ff', ink: '#ffffff', dark: '#1a0640' },   // neon
+  { bg: ['#00c2a8', '#005f6b'], accent: '#ffffff', ink: '#ffffff', dark: '#00262c' },   // teal
+  { bg: ['#f6f6f9', '#c4c9d6'], accent: '#c8102e', ink: '#12141c', dark: '#12141c', light: true }, // white
+  { bg: ['#16181f', '#2a0b13'], accent: '#ffc82e', ink: '#ffffff', dark: '#000000' }   // night
+];
+function rngFrom(seed) { let a = seed >>> 0; return () => { a = (a + 0x6D2B79F5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+const hash01 = (n) => { const x = Math.sin(n * 12.9898 + 78.233) * 43758.5453; return x - Math.floor(x); };
+const unit = () => Math.sqrt(W * H) / 900; // 1 on a 1280 x 640 screen
+const hexA = (hex, a) => { const n = parseInt(hex.slice(1), 16); return `rgba(${n >> 16},${(n >> 8) & 255},${n & 255},${a})`; };
+
+function themeBackground(ctx, th, seed) {
+  const g = ctx.createLinearGradient(0, 0, W, H); g.addColorStop(0, th.bg[0]); g.addColorStop(1, th.bg[1]); ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  const r = rngFrom(seed), cx = r() < 0.5 ? W * (0.05 + 0.2 * r()) : W * (0.75 + 0.2 * r()), cy = H * (0.05 + 0.3 * r()), u = unit(); // a faint web from a corner
+  ctx.strokeStyle = th.light ? 'rgba(0,0,0,0.07)' : 'rgba(255,255,255,0.09)'; ctx.lineWidth = 2 * u;
+  for (let a = 0; a < 14; a++) { ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + Math.cos(a * Math.PI / 7) * 2400, cy + Math.sin(a * Math.PI / 7) * 2400); ctx.stroke(); }
+  for (let rad = 120 * u; rad < 2000 * u; rad += 170 * u) { ctx.beginPath(); for (let a = 0; a <= 14; a++) { const x = cx + Math.cos(a * Math.PI / 7) * rad * (a % 2 ? 0.93 : 1), y = cy + Math.sin(a * Math.PI / 7) * rad * (a % 2 ? 0.93 : 1); a ? ctx.lineTo(x, y) : ctx.moveTo(x, y); } ctx.stroke(); }
+}
+function tagPills(ctx, th, tags, x, y, size, maxX) { ctx.font = `700 ${size}px ${FONT}`; let tx = x; for (const t of tags) { const w = ctx.measureText(t).width + size * 1.1; if (tx + w > maxX) break; ctx.strokeStyle = th.accent; ctx.lineWidth = Math.max(2, size / 14); roundRect(ctx, tx, y, w, size * 1.7, size * 0.85); ctx.stroke(); ctx.fillStyle = th.ink; ctx.textBaseline = 'middle'; ctx.fillText(t, tx + size * 0.55, y + size * 0.85 + 2); ctx.textBaseline = 'alphabetic'; tx += w + size * 0.4; ctx.font = `700 ${size}px ${FONT}`; } }
+function textBlock(ctx, text, x, y, width, max, maxLines, weight, color) { const f = fitLines(ctx, text, width, max, maxLines, weight); ctx.fillStyle = color; ctx.font = `${weight} ${f.size}px ${FONT}`; for (const l of f.lines) { y += f.size * 1.05; ctx.fillText(l, x, y); } return y + f.size * 0.2; }
+
+const DECOR = {
+  /** a project's picture over the whole screen, its name and line along the foot */
+  hero(ctx, d, th) {
+    const u = unit(), pad = 56 * u; drawCover(ctx, d.img, 0, 0, W, H);
+    const g = ctx.createLinearGradient(0, H * 0.3, 0, H); g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(1, 'rgba(0,0,0,0.9)'); ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = th.accent; ctx.fillRect(0, H - 16 * u, W, 16 * u); ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+    let y = H - 16 * u - pad * 0.6;
+    if (d.sub) { ctx.font = `500 ${Math.round(38 * u)}px ${FONT}`; const sl = wrap(ctx, d.sub, W - 2 * pad).slice(0, 2); ctx.fillStyle = '#e4e7ef'; sl.forEach((l, i) => ctx.fillText(l, pad, y - 40 * u * 1.2 * (sl.length - 1 - i))); y -= 40 * u * 1.2 * sl.length + 12 * u; }
+    const f = fitLines(ctx, d.title, W - 2 * pad, Math.round(130 * u), 2); ctx.fillStyle = '#fff'; ctx.font = `800 ${f.size}px ${FONT}`; f.lines.forEach((l, i) => ctx.fillText(l, pad, y - f.size * 1.05 * (f.lines.length - 1 - i)));
+    y -= f.size * 1.05 * f.lines.length + 6 * u; ctx.fillStyle = th.accent; ctx.font = `800 ${Math.round(40 * u)}px ${FONT}`; ctx.fillText(String(d.kicker || '').toUpperCase(), pad, y);
+  },
+  /** a colour poster: kicker, a big title, a line and a few tags; a small framed picture beside it on a wide screen */
+  poster(ctx, d, th) {
+    themeBackground(ctx, th, d.seed); const u = unit(), pad = 60 * u; ctx.textAlign = 'left';
+    const wide = W / H > 1.6 && d.img, s = H - 2 * pad, textW = wide ? W - 2 * pad - s - pad : W - 2 * pad;
+    if (wide) { const ix = W - pad - s; ctx.save(); roundRect(ctx, ix, pad, s, s, 28 * u); ctx.clip(); drawCover(ctx, d.img, ix, pad, s, s); ctx.restore(); ctx.lineWidth = 8 * u; ctx.strokeStyle = th.accent; roundRect(ctx, ix, pad, s, s, 28 * u); ctx.stroke(); }
+    ctx.fillStyle = th.accent; ctx.font = `800 ${Math.round(46 * u)}px ${FONT}`; ctx.fillText(String(d.kicker || '').toUpperCase(), pad, pad + 46 * u);
+    let y = textBlock(ctx, d.title, pad, pad + 56 * u, textW, Math.round(170 * u), 3, 900, th.ink);
+    if (d.sub) y = textBlock(ctx, d.sub, pad, y + 14 * u, textW, Math.round(48 * u), 3, 500, th.light ? 'rgba(0,0,0,0.78)' : 'rgba(255,255,255,0.85)');
+    if (d.tags && d.tags.length) tagPills(ctx, th, d.tags.slice(0, 3), pad, Math.max(y + 24 * u, H - pad - 80 * u), Math.round(40 * u), pad + textW);
+    ctx.fillStyle = th.accent; ctx.fillRect(0, H - 14 * u, W, 14 * u);
+  },
+  /** one giant word (a technology, a tag): the screen is the word */
+  word(ctx, d, th) {
+    themeBackground(ctx, th, d.seed); const u = unit(), pad = 50 * u; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+    const tall = H / W > 1.25, word = String(d.word).toUpperCase(), room = tall ? H - 2 * pad : W - 2 * pad;
+    let size = 600 * u; ctx.font = `900 ${size}px ${FONT}`; while (size > 40 && ctx.measureText(word).width > room) { size -= 8; ctx.font = `900 ${size}px ${FONT}`; }
+    size = Math.min(size, (tall ? W : H) * 0.78); ctx.font = `900 ${size}px ${FONT}`;
+    ctx.save(); ctx.translate(W / 2, H / 2); if (tall) ctx.rotate(-Math.PI / 2);
+    ctx.fillStyle = th.accent; ctx.fillText(word, 7 * u, size * 0.34 + 7 * u); ctx.fillStyle = th.ink; ctx.fillText(word, 0, size * 0.34); ctx.restore();
+    if (d.sub) { ctx.fillStyle = th.accent; ctx.font = `700 ${Math.round(38 * u)}px ${FONT}`; ctx.fillText(d.sub, W / 2, H - pad * 0.8); }
+    ctx.fillStyle = th.accent; ctx.fillRect(0, 0, W, 12 * u);
+  },
+  /** rows of text scrolling past: the same few words, alternating colours */
+  ticker(ctx, d, th) {
+    const u = unit(), n = Math.max(2, Math.min(6, Math.round(H / (150 * u)))), rowH = H / n, parts = d.parts.length ? d.parts : ['PORTFOLIO']; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    for (let i = 0; i < n; i++) {
+      const hot = i % 2 === 0, y = i * rowH; ctx.fillStyle = hot ? th.bg[0] : th.dark; ctx.fillRect(0, y, W, rowH + 1);
+      const size = Math.round(rowH * 0.5); ctx.font = `900 ${size}px ${FONT}`; const unitText = parts.map((p) => String(p).toUpperCase()).join('   ●   ') + '   ●   ';
+      ctx.fillStyle = hot ? th.ink : th.accent; let x = -((i * 0.31) % 1) * ctx.measureText(unitText).width; for (let k = 0; k < 4 && x < W; k++) { ctx.fillText(unitText, x, y + rowH / 2 + 2); x += ctx.measureText(unitText).width; }
+    }
+    ctx.textBaseline = 'alphabetic';
+  },
+  /** a website banner: where to go, in giant type */
+  url(ctx, d, th) {
+    themeBackground(ctx, th, d.seed); const u = unit(), pad = 56 * u; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+    ctx.fillStyle = th.accent; ctx.font = `800 ${Math.round(46 * u)}px ${FONT}`; ctx.fillText(String(d.kicker || 'Visit').toUpperCase(), W / 2, H * 0.3);
+    const size = Math.min(fit(ctx, d.title, W - 2 * pad, Math.round(200 * u)), H * 0.3); ctx.fillStyle = th.ink; ctx.font = `900 ${size}px ${FONT}`; ctx.fillText(d.title, W / 2, H * 0.3 + size * 1.25);
+    if (d.sub) { ctx.fillStyle = th.light ? 'rgba(0,0,0,0.75)' : 'rgba(255,255,255,0.8)'; ctx.font = `500 ${Math.round(42 * u)}px ${FONT}`; ctx.fillText(short(d.sub, 46), W / 2, H * 0.3 + size * 1.25 + 70 * u); }
+    ctx.fillStyle = th.accent; ctx.fillRect(0, H - 14 * u, W, 14 * u);
+  },
+  /** a number from the profile in giant type, with what it counts */
+  stat(ctx, d, th) {
+    themeBackground(ctx, th, d.seed); const u = unit(), pad = 50 * u; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+    const num = String(d.number); let size = 560 * u; ctx.font = `900 ${size}px ${FONT}`; while (size > 40 && ctx.measureText(num).width > W - 2 * pad) { size -= 8; ctx.font = `900 ${size}px ${FONT}`; } size = Math.min(size, H * 0.62); ctx.font = `900 ${size}px ${FONT}`;
+    ctx.fillStyle = th.accent; ctx.fillText(num, W / 2 + 7 * u, H * 0.55 + 7 * u); ctx.fillStyle = th.ink; ctx.fillText(num, W / 2, H * 0.55);
+    ctx.fillStyle = th.accent; const f = fit(ctx, String(d.label).toUpperCase(), W - 2 * pad, Math.round(90 * u)); ctx.font = `900 ${f}px ${FONT}`; ctx.fillText(String(d.label).toUpperCase(), W / 2, H * 0.55 + f * 1.35);
+    if (d.sub) { ctx.fillStyle = th.light ? 'rgba(0,0,0,0.7)' : 'rgba(255,255,255,0.75)'; ctx.font = `600 ${Math.round(34 * u)}px ${FONT}`; ctx.fillText(d.sub, W / 2, H - pad * 0.7); }
+    ctx.fillStyle = th.accent; ctx.fillRect(0, 0, W, 12 * u);
+  },
+  /** abstract web art with the name small on the foot: colour and shape, hardly any text */
+  art(ctx, d, th) {
+    themeBackground(ctx, th, d.seed); const r = rngFrom(d.seed * 977 + 13), u = unit();
+    for (let i = 0; i < 4; i++) { const cx = W * r(), cy = H * r(), rad = (0.18 + 0.4 * r()) * Math.min(W, H) * 1.3, g = ctx.createRadialGradient(cx, cy, 0, cx, cy, rad); g.addColorStop(0, hexA(i % 2 ? th.accent : th.bg[0], 0.85)); g.addColorStop(1, hexA(th.bg[1], 0)); ctx.fillStyle = g; ctx.beginPath(); ctx.arc(cx, cy, rad, 0, 7); ctx.fill(); }
+    ctx.lineWidth = 10 * u; for (let i = 0; i < 3; i++) { ctx.strokeStyle = hexA(i === 1 ? th.accent : th.ink, 0.55); ctx.beginPath(); ctx.arc(W * (0.2 + 0.6 * r()), H * (0.2 + 0.6 * r()), (0.1 + 0.25 * r()) * Math.min(W, H), 0, 7); ctx.stroke(); }
+    ctx.save(); ctx.translate(W / 2, H / 2); ctx.rotate(-0.35 + 0.2 * r()); ctx.fillStyle = hexA(th.accent, 0.9); ctx.fillRect(-W, -9 * u, 2 * W, 18 * u); ctx.fillStyle = hexA(th.ink, 0.9); ctx.fillRect(-W, 26 * u, 2 * W, 7 * u); ctx.restore();
+    ctx.textAlign = 'right'; ctx.fillStyle = th.ink; ctx.font = `800 ${Math.round(30 * u)}px ${FONT}`; ctx.fillText(String(d.sub || '').toUpperCase(), W - 40 * u, H - 34 * u);
+  }
+};
+function drawDecor(ctx, d) { (DECOR[d.style] || DECOR.poster)(ctx, d, THEMES[d.theme % THEMES.length]); }
+
+/**
+ * The designs the profile can make, as plain descriptors { id, content, style, theme, seed, ...text, img }. `content` is what the screen is about (so that copies of one subject can be kept
+ * apart); `style` how it looks. Pictures are only used where there is one (a project whose image did not load gets no hero).
+ */
+function decorDesigns({ profile, imgs = [] }) {
+  const by = { hero: [], poster: [], word: [], ticker: [], url: [], art: [], stat: [] }, name = profile.name, role = profile.role || '';
+  const push = (style, o) => by[style].push({ style, ...o, id: `${style}:${o.content}` });
+  profile.projects.forEach((p, i) => {
+    const content = 'p:' + p.id, img = imgs[i] || null, base = { content, title: p.title, kicker: p.category || 'Project', sub: p.tagline || '', tags: p.tags || [], img };
+    if (img) push('hero', base); push('poster', base);
+    if (p.url) push('url', { content, title: String(p.url).replace(/^https?:\/\//, '').replace(/\/$/, ''), kicker: 'Live now', sub: p.title });
+  });
+  const words = []; for (const w of [...(profile.tech || []), ...profile.projects.flatMap((p) => p.tags || [])]) { const k = String(w).trim(); if (k && k.length <= 14 && !words.some((x) => x.toLowerCase() === k.toLowerCase())) words.push(k); }
+  words.slice(0, 24).forEach((w) => push('word', { content: 'w:' + w.toLowerCase(), word: w, sub: `${name}${role ? ' · ' + role : ''}` }));
+  if (profile.tech && profile.tech.length) push('poster', { content: 'tech', title: 'Skills & Technologies', kicker: 'Toolbox', sub: profile.tech.slice(0, 8).join(' · '), tags: [] });
+  if (profile.links && profile.links.length) push('poster', { content: 'contact', title: 'Contact & Links', kicker: 'Get in touch', sub: profile.links.map((l) => l.label).join(' · '), tags: [] });
+  push('ticker', { content: 'hq', parts: [name, role, 'Portfolio'].filter(Boolean) });
+  if (profile.projects.length) push('ticker', { content: 'projects', parts: profile.projects.map((p) => p.title) });
+  if (profile.tech && profile.tech.length) push('ticker', { content: 'tech', parts: profile.tech.slice(0, 8) });
+  profile.projects.forEach((p) => push('ticker', { content: 'p:' + p.id, parts: [p.title, ...(p.tags || []).slice(0, 3)] }));
+  push('poster', { content: 'hq', title: name, kicker: 'Portfolio', sub: [role, profile.website ? String(profile.website).replace(/^https?:\/\//, '').replace(/\/$/, '') : ''].filter(Boolean).join(' · '), tags: [] }); // the name, without the photo
+  if (profile.tagline) push('poster', { content: 'tagline', title: profile.tagline, kicker: role || 'Portfolio', sub: name, tags: [] });
+  // counts that come straight from the profile
+  if (profile.projects.length) push('stat', { content: 'stat:projects', number: profile.projects.length, label: profile.projects.length === 1 ? 'Project' : 'Projects', sub: name });
+  if (profile.tech && profile.tech.length) push('stat', { content: 'stat:tech', number: profile.tech.length, label: 'Technologies', sub: name });
+  if (profile.links && profile.links.length) push('stat', { content: 'stat:links', number: profile.links.length, label: profile.links.length === 1 ? 'Way to reach me' : 'Ways to reach me', sub: name });
+  words.slice(0, 8).forEach((w) => push('ticker', { content: 'w:' + w.toLowerCase(), parts: [w, name, w, role].filter(Boolean) }));
+  for (let i = 0; i < 16; i++) push('art', { content: 'art:' + i, seed: i + 1, sub: name });
+  let n = 0; for (const style of Object.keys(by)) for (const d of by[style]) { d.seed = d.seed || (n * 7 + 3); d.theme = (n * 3 + (style === 'art' ? 1 : 0)) % THEMES.length; n++; } // the theme never follows the neighbour in the list
+  return by;
+}
+
+/** The pool of one screen shape: the styles taken in turn so that every kind is there, up to `cap` designs. */
+function decorPool(by, cls, cap) {
+  const order = cls === 'wide' ? ['hero', 'word', 'poster', 'stat', 'art', 'ticker', 'url'] : cls === 'square' ? ['word', 'stat', 'hero', 'art', 'poster', 'url', 'ticker'] : ['hero', 'art', 'stat', 'word', 'poster', 'ticker', 'url'];
+  const shift = cls === 'wide' ? 0 : cls === 'square' ? 3 : 6; // each shape starts at another point of every list, so the shapes do not all show the same designs
+  const lists = order.map((k) => { const l = by[k]; const n = l.length ? shift % l.length : 0; return l.slice(n).concat(l.slice(0, n)); }), out = [];
+  while (out.length < cap && lists.some((l) => l.length)) for (const l of lists) { if (l.length && out.length < cap) out.push(l.shift()); }
+  return out;
+}
+
+const SCREEN_CLASS = (s) => { const a = s.w / s.h; return a < 0.95 ? 'tall' : a < 1.45 ? 'square' : 'wide'; };
+
+/**
+ * Chooses a design for each free screen. `used`: Set of slot indexes taken by the key boards; `primaries`: [{ slot, content }] those boards' subjects (their copies are kept away).
+ * Greedy, in a scrambled but fixed order: the cost of a design on a screen counts the same subject nearby (strongly), the same design nearby, the same style on the same wall or close
+ * (so neighbours always differ) and how often the design is already used. Returns Map(slotIndex -> design).
+ */
+function planDecor({ slots, used, primaries = [], by, caps = { wide: 24, square: 12, tall: 12 } }) {
+  const pools = { wide: decorPool(by, 'wide', caps.wide), square: decorPool(by, 'square', caps.square), tall: decorPool(by, 'tall', caps.tall) };
+  const placed = primaries.map((p) => ({ x: p.slot.x, y: p.slot.y, z: p.slot.z, rotY: p.slot.rotY, content: p.content, id: '', style: 'board' })), uses = new Map(), out = new Map();
+  const free = []; slots.forEach((s, i) => { if (!used.has(i)) free.push(i); });
+  free.sort((a, b) => hash01(a + 0.5) - hash01(b + 0.5));
+  const near = (a, s) => Math.hypot(a.x - s.x, a.z - s.z) + Math.abs(a.y - s.y) * 0.6;
+  for (const i of free) {
+    const s = slots[i], pool = pools[SCREEN_CLASS(s)]; if (!pool.length) continue;
+    let best = null, bestCost = Infinity;
+    for (const d of pool) {
+      let cost = (uses.get(d.id) || 0) * 4 + hash01(i * 3.7 + d.seed) * 0.5;
+      for (const a of placed) {
+        const dist = near(a, s), sameWall = Math.abs(a.rotY - s.rotY) < 0.05 && dist < 60;
+        if (a.content === d.content) cost += Math.max(0, 1 - dist / 180) * 75;
+        if (a.id === d.id) cost += Math.max(0, 1 - dist / 240) * 80;
+        if (a.style === d.style) cost += (sameWall ? 150 : 0) + Math.max(0, 1 - dist / 40) * 40;
+        if (sameWall && a.content === d.content) cost += 160; // one subject is never stacked on a wall
+      }
+      if (cost < bestCost) { bestCost = cost; best = d; }
+    }
+    out.set(i, best); uses.set(best.id, (uses.get(best.id) || 0) + 1); placed.push({ x: s.x, y: s.y, z: s.z, rotY: s.rotY, content: best.content, id: best.id, style: best.style });
+  }
+  return out;
+}
+
 /**
  * @param o { THREE, scene, world, profile, sites, rules, log }
  *   profile  normalised (portfolio-content.js): profile.photoUrl, project.imageUrl are loaded here; an image that does not load is reported and dropped
@@ -356,19 +528,17 @@ async function profileBoards({ THREE, scene, world, profile, sites, rules, groun
     pins.push({ id: 'portfolio-contact', name: 'Contact & Links', short: 'Contact', kind: 'contact', ...a });
   }
 
-  // Times Square: every other screen shows the profile too (picture, kicker, title and text in the shape of the screen), and the original posters are gone
+  // Times Square: every other screen shows a design from the pool (planDecor keeps equal ones apart), and the original posters are gone
   let screens = 0;
   if (ts && tsAlloc && tsAlloc.placements.size) {
-    const items = [{ kicker: 'Portfolio', title: profile.name, sub: [profile.role, profile.tagline].filter(Boolean).join(' · '), img: photo }];
-    profile.projects.forEach((p, i) => items.push({ kicker: p.category || 'Project', title: p.title, sub: p.tagline || '', img: imgs[i] }));
-    if (profile.tech.length) items.push({ kicker: 'Toolbox', title: 'Skills & Technologies', sub: profile.tech.slice(0, 8).join(' · ') });
-    if (profile.links.length) items.push({ kicker: 'Get in touch', title: 'Contact & Links', sub: profile.links.map((l) => l.label).join(' · ') });
-    const CLASSES = { tall: [768, 1152], square: [1024, 1024], wide: [1536, 768] }, cache = new Map(), batches = new Map(), nItems = Math.min(items.length, 5); // few textures: the screens repeat
-    ts.slots.forEach((s, i) => {
-      if (tsAlloc.used.has(i)) return;
-      const a = s.w / s.h, cls = a < 0.95 ? 'tall' : a < 1.45 ? 'square' : 'wide', n = (i * 3 + Math.floor(s.y / 9)) % nItems, key = `${n}|${cls}`;
-      let t = cache.get(key); if (!t) { t = makeSized(CLASSES[cls][0], CLASSES[cls][1], (ctx) => drawBanner(ctx, items[n])); cache.set(key, t); batches.set(key, []); }
-      batches.get(key).push({ x: s.x, y: s.y, z: s.z, w: s.w, h: s.h, rotY: s.rotY, uv: coverWindow(CLASSES[cls][0] / CLASSES[cls][1], a) });
+    const by = decorDesigns({ profile, imgs });
+    const primaries = [...tsAlloc.placements].map(([key, pl]) => ({ slot: pl.slot, content: key === 'skills' ? 'tech' : key })); // what each key board is about ('hq', 'p:<id>', 'tech', 'contact')
+    const plan = planDecor({ slots: ts.slots, used: tsAlloc.used, primaries, by });
+    const SIZES = { tall: [512, 768], square: [640, 640], wide: [960, 480] }, cache = new Map(), batches = new Map();
+    plan.forEach((d, i) => {
+      const s = ts.slots[i], cls = SCREEN_CLASS(s), key = `${d.id}|${cls}`, [tw, th] = SIZES[cls];
+      let t = cache.get(key); if (!t) { t = makeSized(tw, th, (ctx) => drawDecor(ctx, d)); cache.set(key, t); batches.set(key, []); }
+      batches.get(key).push({ x: s.x, y: s.y, z: s.z, w: s.w, h: s.h, rotY: s.rotY, uv: coverWindow(tw / th, s.w / s.h) });
       screens++;
     });
     for (const [key, list] of batches) { const mesh = new THREE.Mesh(screenGeometry(THREE, list), ledMat(cache.get(key))); mesh.name = 'PortfolioScreens'; group.add(mesh); }
@@ -380,4 +550,4 @@ async function profileBoards({ THREE, scene, world, profile, sites, rules, groun
   return { group, pins, boards, spots, warnings, timesSquare: ts ? { boards: tsAlloc.placements.size, decor: screens } : null };
 }
 
-export { profileBoards, allocateBoards, allocateSlots, screenGeometry, coverWindow, drawBanner, TS_RULES, mountOnWall, findWall, findStandSpot, overlaps, drawCover, drawProject, drawProfile, drawList };
+export { profileBoards, allocateBoards, allocateSlots, planDecor, decorDesigns, decorPool, drawDecor, THEMES, screenGeometry, coverWindow, drawBanner, TS_RULES, mountOnWall, findWall, findStandSpot, overlaps, drawCover, drawProject, drawProfile, drawList };

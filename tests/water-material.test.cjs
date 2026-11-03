@@ -6,7 +6,7 @@ const vm = require('node:vm');
 
 // Extract createWaterMaterial + its TSL helpers (hash2D, noise2D, filteredPulse, boxCoverage) directly from
 // js/tsl-materials.js and evaluate emissiveNode numerically across time-of-day presets and water regions.
-const source = readFileSync(join(__dirname, '../js/tsl-materials.js'), 'utf8');
+const source = readFileSync(join(__dirname, '../js/tsl-materials.js'), 'utf8').split(String.fromCharCode(13)).join(''); // a Windows checkout has CRLF line endings
 const sliceBetween = (startToken, endToken) => {
   const s = source.indexOf(startToken);
   assert.ok(s >= 0, `found ${startToken}`);
